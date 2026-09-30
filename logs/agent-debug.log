@@ -1,0 +1,375 @@
+=== Wathiq Agent debug log — session started at 2026-09-28T16:19:16.308Z ===
+=== Log file: C:\Users\HP\Desktop\New folder\WathiqAI - Copy\logs\agent-debug.log
+=== Process PID: 22428
+=== Node: v24.15.0
+===
+
+
+────────────────────────────────────────────────────────────────────────
+[AGENT][#1] INCOMING streamChat — "حاب منتج"
+────────────────────────────────────────────────────────────────────────
+[AGENT][#1][REQUEST] payload summary {
+  "message": "حاب منتج",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash-lite",
+  "sessionIdProvided": false,
+  "conversationLength": 0,
+  "hasChipAnswer": false,
+  "chipAnswer": null
+}
+[AGENT][#1][SESSION] key=anon-d4c76f38504b272a106394c19b8186c1 {
+  "hasPendingClarification": false,
+  "lastProduct": null,
+  "lastProductResultsCount": 0,
+  "lastAnalysis": null,
+  "lastRoutine": null,
+  "lastBrandEvaluation": null
+}
+[AGENT][#1][PHASE] fresh turn — running intent router
+[AGENT][#1][INTENT] classified in 2ms {
+  "likelyTools": [
+    "search_products"
+  ],
+  "confidence": "medium",
+  "entities": {},
+  "note": "product discovery request"
+}
+[AGENT][#1][CLARIFY] checking clarification trigger for intent=search_products
+[AGENT][#1][CLARIFY] decision: ASK — 2 question(s) from slots [category, target_type] {
+  "questions": [
+    {
+      "slot": "category",
+      "label": "ما نوع المنتج الذي تبحث عنه؟"
+    },
+    {
+      "slot": "target_type",
+      "label": "نوع البشرة / الشعر:"
+    }
+  ]
+}
+[AGENT][#1][RESPONSE] CLARIFICATION sent (chips, initial) {
+  "intent": "search_products",
+  "questions": [
+    {
+      "slot": "category",
+      "label": "ما نوع المنتج الذي تبحث عنه؟"
+    },
+    {
+      "slot": "target_type",
+      "label": "نوع البشرة / الشعر:"
+    }
+  ],
+  "extractedSlots": {}
+}
+[AGENT][#1] ✔ initial clarification — total 7ms
+
+────────────────────────────────────────────────────────────────────────
+[AGENT][#2] INCOMING streamChat — "سيروم، دهنية"
+────────────────────────────────────────────────────────────────────────
+[AGENT][#2][REQUEST] payload summary {
+  "message": "سيروم، دهنية",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash-lite",
+  "sessionIdProvided": true,
+  "conversationLength": 2,
+  "hasChipAnswer": true,
+  "chipAnswer": {
+    "category": "skin_serum",
+    "target_type": "oily"
+  }
+}
+[AGENT][#2][SESSION] key=anon-d4c76f38504b272a106394c19b8186c1 {
+  "hasPendingClarification": true,
+  "lastProduct": null,
+  "lastProductResultsCount": 0,
+  "lastAnalysis": null,
+  "lastRoutine": null,
+  "lastBrandEvaluation": null
+}
+[AGENT][#2][PHASE] entering clarification resolver
+[AGENT][#2][CLARIFY] pending clarification exists {
+  "intent": "search_products",
+  "collectedSlots": {},
+  "turnsAsked": 1,
+  "originalMessage": "حاب منتج",
+  "hasChipAnswer": true
+}
+[AGENT][#2][CLARIFY] merging chip answer {
+  "chipAnswer": {
+    "category": "skin_serum",
+    "target_type": "oily"
+  },
+  "mergedSlots": {
+    "category": "skin_serum",
+    "target_type": "oily"
+  }
+}
+[AGENT][#2][CLARIFY] decision: ask-again (2 question(s) from slots [budget, country])
+[AGENT][#2][PHASE] clarification resolver done in 1ms → clarify
+[AGENT][#2][RESPONSE] CLARIFICATION sent (chips) {
+  "intent": "search_products",
+  "turnsAsked": 2,
+  "questions": [
+    {
+      "slot": "budget",
+      "label": "ما ميزانيتك التقريبية؟",
+      "optionsCount": 5
+    },
+    {
+      "slot": "country",
+      "label": "تفضيل المنشأ:",
+      "optionsCount": 4
+    }
+  ],
+  "escapeLabel": "أعرض كل المنتجات دون فلترة",
+  "collectedSlots": {
+    "category": "skin_serum",
+    "target_type": "oily"
+  }
+}
+[AGENT][#2] ✔ clarification #2 — total 2ms
+
+────────────────────────────────────────────────────────────────────────
+[AGENT][#3] INCOMING streamChat — "أقل من 1500 دج، كوري"
+────────────────────────────────────────────────────────────────────────
+[AGENT][#3][REQUEST] payload summary {
+  "message": "أقل من 1500 دج، كوري",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash-lite",
+  "sessionIdProvided": true,
+  "conversationLength": 4,
+  "hasChipAnswer": true,
+  "chipAnswer": {
+    "budget": "under_1500",
+    "country": "Korea"
+  }
+}
+[AGENT][#3][SESSION] key=anon-d4c76f38504b272a106394c19b8186c1 {
+  "hasPendingClarification": true,
+  "lastProduct": null,
+  "lastProductResultsCount": 0,
+  "lastAnalysis": null,
+  "lastRoutine": null,
+  "lastBrandEvaluation": null
+}
+[AGENT][#3][PHASE] entering clarification resolver
+[AGENT][#3][CLARIFY] pending clarification exists {
+  "intent": "search_products",
+  "collectedSlots": {
+    "category": "skin_serum",
+    "target_type": "oily"
+  },
+  "turnsAsked": 2,
+  "originalMessage": "حاب منتج",
+  "hasChipAnswer": true
+}
+[AGENT][#3][CLARIFY] merging chip answer {
+  "chipAnswer": {
+    "budget": "under_1500",
+    "country": "Korea"
+  },
+  "mergedSlots": {
+    "category": "skin_serum",
+    "target_type": "oily",
+    "budget": "under_1500",
+    "country": "Korea"
+  }
+}
+[AGENT][#3][CLARIFY] decision: execute (max turns reached (2))
+[AGENT][#3][PHASE] clarification resolver done in 0ms → execute
+[AGENT][#3][PHASE] executing after clarification {
+  "extraHints": [
+    "[User's chip selections — call search_products with these arguments directly, do not re-ask: category=\"skin_serum\", skin_type=\"oily\", max_price=1500, country=\"Korea\"]"
+  ]
+}
+[AGENT][#3][MESSAGES] built in 1ms {
+  "messageCount": 5,
+  "historyTurns": 4,
+  "routerLine": "(none)",
+  "extraHints": [
+    "[User's chip selections — call search_products with these arguments directly, do not re-ask: category=\"skin_serum\", skin_type=\"oily\", max_price=1500, country=\"Korea\"]"
+  ],
+  "contextHintsCount": 0,
+  "contextHints": [],
+  "augmentedUserMessagePreview": "أقل من 1500 دج، كوري\n\n[User's chip selections — call search_products with these arguments directly, do not re-ask: category=\"skin_serum\", skin_type=\"oily\", max_price=1500, country=\"Korea\"]"
+}
+[AGENT][#3][SYSTEM_PROMPT] sent to model {
+  "length": 12438,
+  "sha256": "8ceee055c3087e60",
+  "head": "You are Wathiq Intelligence (وثيق), an elite cosmetic & derm",
+  "note": "sha256 should be IDENTICAL on every turn. If it changes, something is mutating the system prompt."
+}
+[AGENT][#3][TOOLS] registered: search_products, get_product, get_products_details, evaluate_product, evaluate_brand, list_unknown_ingredients, build_routine
+[AGENT][#3][MODEL] streamText config {
+  "model": "gemini-2.5-flash-lite",
+  "wantsDetail": false,
+  "maxOutputTokens": 200,
+  "temperature": 0.2,
+  "stopWhen": "stepCountIs(5)"
+}
+[AGENT][#3][STREAM] … other event: start
+[AGENT][#3][STREAM] ▶ step 1 start (t=1189ms)
+[AGENT][#3][STREAM] … other event: tool-input-start
+[AGENT][#3][STREAM] … other event: tool-input-delta
+[AGENT][#3][STREAM] … other event: tool-input-end
+[AGENT][#3][STREAM] → tool-call #1: search_products (t=1193ms) {
+  "args": {
+    "country": "Korea",
+    "category": "skin_serum",
+    "skin_type": "oily",
+    "max_price": 1500
+  }
+}
+[AGENT][#3][TOOL:search_products] args {
+  "country": "Korea",
+  "category": "skin_serum",
+  "skin_type": "oily",
+  "max_price": 1500
+}
+[AGENT][#3][TOOL:search_products] ✔ 19ms {
+  "foundCount": 5,
+  "returnedCount": 5,
+  "top": [
+    "Beauty of Joseon Glow Serum : Propolis + Niacinamide —  DZD",
+    "K-Secret Calamine Derma Secret Serum —  DZD",
+    "K-Secret Hyaluronic Acid Secret Ampoule —  DZD"
+  ]
+}
+[AGENT][#3][STREAM] ← tool-result: search_products (t=1238ms) {
+  "foundCount": 5,
+  "returnedCount": 5,
+  "top": [
+    "Beauty of Joseon Glow Serum : Propolis + Niacinamide —  DZD",
+    "K-Secret Calamine Derma Secret Serum —  DZD",
+    "K-Secret Hyaluronic Acid Secret Ampoule —  DZD"
+  ]
+}
+[AGENT][#3][STREAM] ■ step 1 finish (t=1240ms)
+[AGENT][#3][STREAM] ▶ step 2 start (t=2124ms)
+[AGENT][#3][STREAM] … other event: text-start
+[AGENT][#3][STREAM] ⚡ first text-delta at 2162ms (total since request: 2169ms)
+[AGENT][#3][STREAM] … other event: text-end
+[AGENT][#3][STREAM] ■ step 2 finish (t=2655ms)
+[AGENT][#3][STREAM] ✎ finish event {
+  "finishReason": "stop",
+  "tTotalStreamMs": 2656
+}
+[AGENT][#3][STREAM] stream finished {
+  "steps": 2,
+  "toolCalls": 1,
+  "textDeltas": 27,
+  "fullTextLength": 160,
+  "timeToFirstTokenMs": 2162,
+  "totalStreamMs": 2657
+}
+[AGENT][#3][LLM_REPLY] assistant text (full):
+----BEGIN LLM REPLY----
+إليك أفضل المنتجات المطابقة لطلبك من كتالوج وثيق، موضحة في البطاقات أدناه. يمكنك النقر على أي منتج لتحليله بالكامل، أو إخباري إذا كنت تفضل نطاقاً سعرياً محدداً.
+----END LLM REPLY----
+[AGENT][#3][RESPONSE] interactive cards produced {
+  "sectionsCount": 1,
+  "sectionTypes": [
+    "product_results"
+  ],
+  "primarySectionType": "product_results",
+  "messageLength": 160,
+  "messagePreview": "إليك أفضل المنتجات المطابقة لطلبك من كتالوج وثيق، موضحة في البطاقات أدناه. يمكنك النقر على أي منتج لتحليله بالكامل، أو إخباري إذا كنت تفضل نطاقاً سعرياً محدداً."
+}
+[AGENT][#3] ✔ turn complete — total 2666ms — product_results
+[AGENT][#3][TURN_SUMMARY] turnState after tools {
+  "productResultsCount": 5,
+  "lastProduct": null,
+  "lastAnalysis": null,
+  "lastRoutine": null,
+  "lastBrandEvaluation": null
+}
+
+────────────────────────────────────────────────────────────────────────
+[AGENT][#4] INCOMING streamChat — "شحال أسعارهم"
+────────────────────────────────────────────────────────────────────────
+[AGENT][#4][REQUEST] payload summary {
+  "message": "شحال أسعارهم",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash-lite",
+  "sessionIdProvided": true,
+  "conversationLength": 6,
+  "hasChipAnswer": false,
+  "chipAnswer": null
+}
+[AGENT][#4][SESSION] key=anon-d4c76f38504b272a106394c19b8186c1 {
+  "hasPendingClarification": false,
+  "lastProduct": null,
+  "lastProductResultsCount": 5,
+  "lastAnalysis": null,
+  "lastRoutine": null,
+  "lastBrandEvaluation": null
+}
+[AGENT][#4][PHASE] fresh turn — running intent router
+[AGENT][#4][INTENT] classified in 2ms {
+  "likelyTools": [],
+  "confidence": "low",
+  "entities": {},
+  "note": ""
+}
+[AGENT][#4][CLARIFY] skipped — topTool=none, confidence=low
+[AGENT][#4][PHASE] running normal LLM flow
+[AGENT][#4][MESSAGES] built in 1ms {
+  "messageCount": 7,
+  "historyTurns": 6,
+  "routerLine": "(none)",
+  "extraHints": [],
+  "contextHintsCount": 2,
+  "contextHints": [
+    "[Context: Products shown to user: Beauty of Joseon Glow Serum : Propolis + Niacinamide [ID: KR-SSE-BOJ-002, Price:  DZD]، K-Secret Calamine Derma Secret Serum [ID: KR-SSE-KSE-006, Price:  DZD]، K-Secret Hyaluronic Acid Secret Ampoule [ID: KR-SSE-KSE-010, Price:  DZD]، Purito Seoul Azelaic Acid 10 Kojic Tea Tree Serum [ID: KR-SSE-PUR-002, Price:  DZD]، Purito Seoul Clear Code Super Fruit Serum [ID: KR-SSE-PUR-010, Price:  DZD]]",
+    "[Context: Last price mentioned = 1500 دج]"
+  ],
+  "augmentedUserMessagePreview": "شحال أسعارهم\n\n[Context: Products shown to user: Beauty of Joseon Glow Serum : Propolis + Niacinamide [ID: KR-SSE-BOJ-002, Price:  DZD]، K-Secret Calamine Derma Secret Serum [ID: KR-SSE-KSE-006, Price:  DZD]، K-Secret Hyaluronic Acid Secret Ampoule [ID: KR-SSE-KSE-010, Price:  DZD]، Purito Seoul Azelaic Acid 10 Kojic Tea Tree Serum [ID: KR-SSE-PUR-002, Price:  DZD]، Purito Seoul Clear Code Super Fr"
+}
+[AGENT][#4][SYSTEM_PROMPT] sent to model {
+  "length": 12438,
+  "sha256": "8ceee055c3087e60",
+  "head": "You are Wathiq Intelligence (وثيق), an elite cosmetic & derm",
+  "note": "sha256 should be IDENTICAL on every turn. If it changes, something is mutating the system prompt."
+}
+[AGENT][#4][TOOLS] registered: search_products, get_product, get_products_details, evaluate_product, evaluate_brand, list_unknown_ingredients, build_routine
+[AGENT][#4][MODEL] streamText config {
+  "model": "gemini-2.5-flash-lite",
+  "wantsDetail": false,
+  "maxOutputTokens": 200,
+  "temperature": 0.2,
+  "stopWhen": "stepCountIs(5)"
+}
+[AGENT][#4][STREAM] … other event: start
+[AGENT][#4][STREAM] ▶ step 1 start (t=990ms)
+[AGENT][#4][STREAM] … other event: text-start
+[AGENT][#4][STREAM] ⚡ first text-delta at 1076ms (total since request: 1084ms)
+[AGENT][#4][STREAM] … other event: text-end
+[AGENT][#4][STREAM] ■ step 1 finish (t=1287ms)
+[AGENT][#4][STREAM] ✎ finish event {
+  "finishReason": "stop",
+  "tTotalStreamMs": 1287
+}
+[AGENT][#4][STREAM] stream finished {
+  "steps": 1,
+  "toolCalls": 0,
+  "textDeltas": 11,
+  "fullTextLength": 59,
+  "timeToFirstTokenMs": 1076,
+  "totalStreamMs": 1288
+}
+[AGENT][#4][LLM_REPLY] assistant text (full):
+----BEGIN LLM REPLY----
+الأسعار موضحة في البطاقات أدناه. هل تود تقييم أي منتج منها؟
+----END LLM REPLY----
+[AGENT][#4][RESPONSE] no cards produced — plain assistant_message {
+  "messageLength": 59,
+  "messagePreview": "الأسعار موضحة في البطاقات أدناه. هل تود تقييم أي منتج منها؟"
+}
+[AGENT][#4] ✔ turn complete — total 1298ms — assistant_message
+[AGENT][#4][TURN_SUMMARY] turnState after tools {
+  "productResultsCount": 0,
+  "lastProduct": null,
+  "lastAnalysis": null,
+  "lastRoutine": null,
+  "lastBrandEvaluation": null
+}

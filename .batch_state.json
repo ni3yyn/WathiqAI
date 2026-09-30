@@ -1,0 +1,67 @@
+{
+  "DZ-CLE-LAB-002": {
+    "status": "processed",
+    "timestamp": "2026-09-30T12:32:13.533Z",
+    "attempts": 1
+  },
+  "DZ-XXX-CALLI-001": {
+    "status": "no_comments",
+    "timestamp": "2026-09-30T12:35:17.471Z",
+    "attempts": 1
+  },
+  "DZ-CLE-BIOL-001": {
+    "status": "no_comments",
+    "timestamp": "2026-09-30T12:38:07.233Z",
+    "attempts": 1
+  },
+  "DZ-OIL-SWA-001": {
+    "status": "processed",
+    "timestamp": "2026-09-30T16:36:23.112Z",
+    "attempts": 1
+  },
+  "DZ-OIL-SWA-002": {
+    "status": "no_videos",
+    "timestamp": "2026-09-30T16:36:38.091Z",
+    "attempts": 1
+  },
+  "DZ-XXX-CALL-001": {
+    "status": "no_videos",
+    "timestamp": "2026-09-30T16:36:49.189Z",
+    "attempts": 1
+  },
+  "DZ-XXX-SHE-001": {
+    "status": "no_videos",
+    "timestamp": "2026-09-30T16:37:02.090Z",
+    "attempts": 1
+  },
+  "FR-SSE-YVE-001": {
+    "status": "no_comments",
+    "timestamp": "2026-09-30T16:45:03.971Z",
+    "attempts": 1
+  },
+  "OT-SCR-THE-001": {
+    "status": "no_comments",
+    "timestamp": "2026-09-30T16:48:12.929Z",
+    "attempts": 1
+  },
+  "FR-SUN-CIE-002": {
+    "status": "no_comments",
+    "timestamp": "2026-09-30T16:52:02.671Z",
+    "attempts": 1
+  },
+  "FR-BWA-CIE-002": {
+    "status": "processed",
+    "timestamp": "2026-09-30T17:03:36.823Z",
+    "attempts": 1
+  },
+  "FR-BWA-CIE-001": {
+    "status": "no_comments",
+    "timestamp": "2026-09-30T17:06:14.563Z",
+    "attempts": 1
+  },
+  "FR-SHA-CIE-001": {
+    "status": "processed",
+    "timestamp": "2026-09-30T17:09:11.780Z",
+    "attempts": 1
+  }
+}
