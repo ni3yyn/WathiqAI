@@ -11,6 +11,11 @@ dotenv.config();
 
 const server = fastify({ logger: true });
 
+// ─── LIGHTWEIGHT HEALTH PING ENDPOINT ────────────────────────────────────────
+server.get('/health', async (request, reply) => {
+    return { status: 'alive', timestamp: Date.now(), uptime: process.uptime() };
+});
+
 server.get('/', async (request, reply) => {
     try {
         let htmlPath = path.join(__dirname, 'public', 'index.html');
