@@ -13,6 +13,18 @@ dotenv.config();
 
 const server = fastify({ logger: true });
 
+// ─── GLOBAL CORS HOOK (ALLOWS REACT / VITE TO TALK TO FASTIFY) ───────────────
+server.addHook('onRequest', async (request, reply) => {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+
+    // Instantly answer browser preflight OPTIONS requests with 204 No Content
+    if (request.method === 'OPTIONS') {
+        return reply.status(204).send();
+    }
+});
+
 // ─── LIGHTWEIGHT HEALTH PING ENDPOINT ────────────────────────────────────────
 server.get('/health', async (request, reply) => {
     return { status: 'alive', timestamp: Date.now(), uptime: process.uptime() };
