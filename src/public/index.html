@@ -1894,14 +1894,15 @@
             </div>
 
             <div class="flex items-center gap-2.5 shrink-0">
-                <div class="engine-switch" title="تبديل محرك الذكاء الاصطناعي">
-                    <button type="button" id="engineGeminiBtn" onclick="setEngine('gemini')" class="engine-btn active" title="Google Gemini 3.5 Flash Lite">
-                        <span>💎 Gemini</span>
-                    </button>
-                    <button type="button" id="engineGroqBtn" onclick="setEngine('groq')" class="engine-btn" title="Groq OSS (Fast)">
-                        <span>⚡ Groq</span>
-                    </button>
-                </div>
+                <div class="engine-switch" style="display: none !important;" title="تبديل محرك الذكاء الاصطناعي">
+    <button type="button" id="engineGeminiBtn" onclick="setEngine('gemini')" class="engine-btn active" title="Google Gemini 3.5 Flash Lite">
+        <span>💎 Gemini</span>
+    </button>
+    <button type="button" id="engineGroqBtn" onclick="setEngine('groq')" class="engine-btn" title="Groq OSS (Fast)">
+        <span>⚡ Groq</span>
+    </button>
+</div>
+
 
                 <button onclick="clearChat()" class="reset-btn bg-white/70 hover:bg-white text-mist-600 hover:text-sage-800 font-semibold transition shadow-soft flex items-center gap-1.5" style="padding: 0.5rem 0.9rem; border-radius: 0.7rem; font-size: 0.78rem;">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg>
@@ -2022,7 +2023,8 @@
     <script>
         let conversation = [];
         let isAnimating = false;
-        let currentEngine = localStorage.getItem('wathiq_ai_engine') || 'gemini';
+        // Change this line:
+let currentEngine = 'gemini'; // Locked to Gemini while the switcher is hidden
         let userHasScrolledUp = false;
         let hasNewContentWhileScrolled = false;
         let recognition = null;
@@ -3833,6 +3835,8 @@ if (finalData) {
                 scrollToBottomSmart();
             });
         }
+
+        
     </script>
 </body>
 </html>
