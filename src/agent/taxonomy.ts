@@ -625,16 +625,22 @@ export function expandToCatalogClaims(inputClaims: string[]): string[] {
     const matched = new Set<string>();
     for (const claim of inputClaims) {
         const cLow = claim.toLowerCase().trim();
+        
+        // 1. Add the raw claim just in case
+        matched.add(cLow);
 
-        // If directly in catalog, add it
-        const direct = WATHIQ_CATALOG_CLAIMS.find(c => c.toLowerCase() === cLow);
+        // 2. Direct match against catalog
+        const direct = WATHIQ_CATALOG_CLAIMS.find(c => c.toLowerCase().includes(cLow) || cLow.includes(c.toLowerCase()));
         if (direct) {
-            matched.add(direct);
+            matched.add(direct.toLowerCase());
         }
 
+        // 3. Translate via aliases (English/French/Darija -> Arabic)
         for (const mapping of CLAIM_MAPPINGS) {
-            if (mapping.aliases.some(a => cLow.includes(a.toLowerCase()) || a.toLowerCase().includes(cLow))) {
-                mapping.catalogClaims.forEach(cc => matched.add(cc));
+            const isMatch = mapping.aliases.some(a => cLow.includes(a.toLowerCase()) || a.toLowerCase().includes(cLow)) ||
+                            mapping.catalogClaims.some(c => cLow.includes(c.toLowerCase()) || c.toLowerCase().includes(cLow));
+            if (isMatch) {
+                mapping.catalogClaims.forEach(cc => matched.add(cc.toLowerCase()));
             }
         }
     }

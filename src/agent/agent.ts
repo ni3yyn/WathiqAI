@@ -1,6 +1,5 @@
 import { groq } from '@ai-sdk/groq';
-import { google } from '@ai-sdk/google';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { google, createGoogleGenerativeAI } from '@ai-sdk/google';
 import { streamText, generateText, tool, stepCountIs, smoothStream } from 'ai';
 import { z } from 'zod';
 import crypto from 'crypto';
@@ -84,23 +83,6 @@ function getNextGeminiApiKey(): string | undefined {
 
     // Pick a random key from your pool for each chat turn to distribute traffic!
     return keys[Math.floor(Math.random() * keys.length)];
-}
-
-function resolveModel(provider?: string) {
-    if (provider === 'gemini' || provider === 'google') {
-        const geminiModel = process.env.GEMINI_AGENT_MODEL || 'gemini-3.5-flash-lite';
-        const apiKey = getNextGeminiApiKey();
-        
-        // Dynamically instantiate the Google provider with a rotated key!
-        const googleProvider = apiKey 
-            ? createGoogleGenerativeAI({ apiKey }) 
-            : createGoogleGenerativeAI();
-
-        return googleProvider(geminiModel);
-    }
-    
-    const groqModel = process.env.GROQ_AGENT_MODEL || 'openai/gpt-oss-120b';
-    return groq(groqModel);
 }
 
 function extractContextHints(conversation?: ChatMessage[]): string[] {
@@ -1216,6 +1198,18 @@ function formatFinalResponse(userMessage: string, assistantText: string, state: 
 /**
  * Streaming Chat using Vercel AI SDK
  */
+// ─── HELPER: EXTRACT AND CLEAN KEYS FROM GEMINI_API_KEYS ─────────────────────
+function getGeminiApiKeys(): string[] {
+    const raw = process.env.GEMINI_API_KEYS || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
+    const keys = raw
+        .split(',')
+        .map(k => k.replace(/['"\s]/g, '').trim())
+        .filter(Boolean);
+
+    return keys.length > 0 ? keys : [''];
+}
+
+// ─── UNOMITTED PRODUCTION STREAMCHAT WITH FAILOVER LOOP ───────────────────────
 export async function streamChat(
     request: ChatRequest,
     callbacks: {
@@ -1226,7 +1220,14 @@ export async function streamChat(
 ) {
     const sessionId = deriveSessionKey(request);
     const state = getOrCreateState(sessionId);
-    const turnState: AgentStateTracker = { lastProductResults: null, lastProduct: null, lastAnalysis: null, lastRoutine: null, lastBrandEvaluation: null, lastReviewData: null };
+    const turnState: AgentStateTracker = { 
+        lastProductResults: null, 
+        lastProduct: null, 
+        lastAnalysis: null, 
+        lastRoutine: null, 
+        lastBrandEvaluation: null, 
+        lastReviewData: null 
+    };
 
     // Run router first (0.1ms)
     const quickIntent = classifyIntent(request.message, state);
@@ -1249,92 +1250,124 @@ export async function streamChat(
     const wantsDetail = /تفصيل|بالتفصيل|اشرح|لماذا|فسر|مكونات|قائمة|غير معروف|غير معروفة|مجهول|غير مفهرس|détail|explain|why|ingredients|ingrédients|unknown|unrecognized|not identified/i.test(stripArabicDiacritics(request.message));
     const maxOutputTokens = wantsDetail ? 1200 : 200;
 
-    const stream = streamText({
-        model: resolveModel(request.provider),
-        system: WATHIQ_SYSTEM_PROMPT,
-        messages,
-        tools,
-        stopWhen: stepCountIs(5),
-        maxOutputTokens,
-        temperature: 0.2
-    });
+    const isGemini = !request.provider || request.provider === 'gemini' || request.provider === 'google';
+    const keys = isGemini ? getGeminiApiKeys() : [''];
 
     let fullText = '';
+    let lastError: any = null;
 
-    try {
-        for await (const part of stream.fullStream) {
-            if (part.type === 'tool-call') {
-                if (part.toolName === 'search_products') {
-                    callbacks.onStatus?.('🔍 جاري البحث في كتالوج المنتجات...');
-                } else if (part.toolName === 'evaluate_product') {
-                    callbacks.onStatus?.('🧪 جاري فحص وتحليل التركيبة مع OilGuard...');
-                } else if (part.toolName === 'evaluate_brand') {
-                    callbacks.onStatus?.('🏷️ جاري تحليل جميع منتجات الماركة...');
-                } else if (part.toolName === 'get_product') {
-                    callbacks.onStatus?.('📋 جاري استرجاع تفاصيل المنتج ومكوناته...');
-                } else if (part.toolName === 'build_routine') {
-                    callbacks.onStatus?.('🧴 جاري تكوين روتين عناية متكامل...');
-                } else if (part.toolName === 'get_products_details') {
-                    callbacks.onStatus?.('📋 جاري استرجاع مكونات المنتجات...');
-                } else if (part.toolName === 'list_unknown_ingredients') {
-                    callbacks.onStatus?.('🧪 جاري تحليل المكونات غير المفهرسة... قد يستغرق هذا بعض الوقت');
-                } else if (part.toolName === 'get_community_reviews') {
-                    callbacks.onStatus?.('💬 جاري فحص تجارب وآراء المستخدمين في تيك توك...');
-                } else if (part.toolName === 'suggest_learning') {
-                    callbacks.onStatus?.('💡 جاري تسجيل المعلومة الجديدة للتدقيق...');
-                }
-            } else if (part.type === 'tool-result') {
-                callbacks.onStatus?.('✨ جاري صياغة التقييم والنتيجة...');
+    // ─── SEQUENTIAL KEY FAILOVER LOOP (NO BLACKLISTS) ────────────────────────
+    for (let i = 0; i < keys.length; i++) {
+        const apiKey = keys[i];
 
-                // ─── EAGER CARD STREAMING ──────────────────────────────────────
-                if (part.toolName === 'search_products' && turnState.lastProductResults) {
-                    callbacks.onCardReady?.('product_results', { products: turnState.lastProductResults });
-                } else if (part.toolName === 'evaluate_product') {
-                    if (turnState.lastAnalysis) {
-                        callbacks.onCardReady?.('product_analysis', {
-                            analysis: turnState.lastAnalysis.evaluation,
-                            productId: turnState.lastAnalysis.productId,
-                            productName: turnState.lastAnalysis.name,
-                            brand: turnState.lastAnalysis.brand
-                        });
-                    } else if (turnState.lastProductResults) {
-                        // Ambiguous match: stream clickable candidate cards!
-                        callbacks.onCardReady?.('product_results', { products: turnState.lastProductResults });
-                    }
-                } else if (part.toolName === 'get_product') {
-                    if (turnState.lastProduct) {
-                        callbacks.onCardReady?.('product', { product: turnState.lastProduct });
-                    } else if (turnState.lastProductResults) {
-                        // Ambiguous match: stream clickable candidate cards!
-                        callbacks.onCardReady?.('product_results', { products: turnState.lastProductResults });
-                    }
-                } else if (part.toolName === 'build_routine' && turnState.lastRoutine) {
-                    callbacks.onCardReady?.('routine', { routine: turnState.lastRoutine });
-                } else if (part.toolName === 'evaluate_brand' && turnState.lastBrandEvaluation) {
-                    callbacks.onCardReady?.('brand_evaluation', { brandEvaluation: turnState.lastBrandEvaluation });
-                } else if (part.toolName === 'get_community_reviews') {
-                    if ((turnState as any).lastReviewData) {
-                        callbacks.onCardReady?.('community_reviews', (turnState as any).lastReviewData);
-                    } else if (turnState.lastProductResults) {
-                        // Stream candidate cards if the product name was ambiguous!
-                        callbacks.onCardReady?.('product_results', { products: turnState.lastProductResults });
-                    }
-                }
-                // ─── END EAGER CARD STREAMING ──────────────────────────────────
+        try {
+            console.log(`[AGENT] 🔑 Attempting stream with key [${i + 1}/${keys.length}]...`);
 
-            } else if (part.type === 'text-delta') {
-                const delta = (part as any).textDelta || (part as any).text;
-                if (delta) {
-                    fullText += delta;
-                    callbacks.onTextDelta?.(delta);
+            const model = isGemini
+                ? (apiKey ? createGoogleGenerativeAI({ apiKey }) : createGoogleGenerativeAI())(process.env.GEMINI_AGENT_MODEL || 'gemini-3.5-flash-lite')
+                : groq(process.env.GROQ_AGENT_MODEL || 'openai/gpt-oss-120b');
+
+            const stream = streamText({
+                model,
+                system: WATHIQ_SYSTEM_PROMPT,
+                messages,
+                tools,
+                stopWhen: stepCountIs(5),
+                maxOutputTokens,
+                temperature: 0.2
+            });
+
+            for await (const part of stream.fullStream) {
+                if (part.type === 'tool-call') {
+                    if (part.toolName === 'search_products') {
+                        callbacks.onStatus?.('🔍 جاري البحث في كتالوج المنتجات...');
+                    } else if (part.toolName === 'evaluate_product') {
+                        callbacks.onStatus?.('🧪 جاري فحص وتحليل التركيبة مع OilGuard...');
+                    } else if (part.toolName === 'evaluate_brand') {
+                        callbacks.onStatus?.('🏷️ جاري تحليل جميع منتجات الماركة...');
+                    } else if (part.toolName === 'get_product') {
+                        callbacks.onStatus?.('📋 جاري استرجاع تفاصيل المنتج ومكوناته...');
+                    } else if (part.toolName === 'build_routine') {
+                        callbacks.onStatus?.('🧴 جاري تكوين روتين عناية متكامل...');
+                    } else if (part.toolName === 'get_products_details') {
+                        callbacks.onStatus?.('📋 جاري استرجاع مكونات المنتجات...');
+                    } else if (part.toolName === 'list_unknown_ingredients') {
+                        callbacks.onStatus?.('🧪 جاري تحليل المكونات غير المفهرسة... قد يستغرق هذا بعض الوقت');
+                    } else if (part.toolName === 'get_community_reviews') {
+                        callbacks.onStatus?.('💬 جاري فحص تجارب وآراء المستخدمين في تيك توك...');
+                    } else if (part.toolName === 'suggest_learning') {
+                        callbacks.onStatus?.('💡 جاري تسجيل المعلومة الجديدة للتدقيق...');
+                    }
+                } else if (part.type === 'tool-result') {
+                    callbacks.onStatus?.('✨ جاري صياغة التقييم والنتيجة...');
+
+                    // ─── EAGER CARD STREAMING ──────────────────────────────────────
+                    if (part.toolName === 'search_products' && turnState.lastProductResults) {
+                        callbacks.onCardReady?.('product_results', { products: turnState.lastProductResults });
+                    } else if (part.toolName === 'evaluate_product') {
+                        if (turnState.lastAnalysis) {
+                            callbacks.onCardReady?.('product_analysis', {
+                                analysis: turnState.lastAnalysis.evaluation,
+                                productId: turnState.lastAnalysis.productId,
+                                productName: turnState.lastAnalysis.name,
+                                brand: turnState.lastAnalysis.brand
+                            });
+                        } else if (turnState.lastProductResults) {
+                            // Ambiguous match: stream clickable candidate cards!
+                            callbacks.onCardReady?.('product_results', { products: turnState.lastProductResults });
+                        }
+                    } else if (part.toolName === 'get_product') {
+                        if (turnState.lastProduct) {
+                            callbacks.onCardReady?.('product', { product: turnState.lastProduct });
+                        } else if (turnState.lastProductResults) {
+                            // Ambiguous match: stream clickable candidate cards!
+                            callbacks.onCardReady?.('product_results', { products: turnState.lastProductResults });
+                        }
+                    } else if (part.toolName === 'build_routine' && turnState.lastRoutine) {
+                        callbacks.onCardReady?.('routine', { routine: turnState.lastRoutine });
+                    } else if (part.toolName === 'evaluate_brand' && turnState.lastBrandEvaluation) {
+                        callbacks.onCardReady?.('brand_evaluation', { brandEvaluation: turnState.lastBrandEvaluation });
+                    } else if (part.toolName === 'get_community_reviews') {
+                        if ((turnState as any).lastReviewData) {
+                            callbacks.onCardReady?.('community_reviews', (turnState as any).lastReviewData);
+                        } else if (turnState.lastProductResults) {
+                            // Stream candidate cards if the product name was ambiguous!
+                            callbacks.onCardReady?.('product_results', { products: turnState.lastProductResults });
+                        }
+                    }
+                    // ─── END EAGER CARD STREAMING ──────────────────────────────────
+
+                } else if (part.type === 'text-delta') {
+                    const delta = (part as any).textDelta || (part as any).text;
+                    if (delta) {
+                        fullText += delta;
+                        callbacks.onTextDelta?.(delta);
+                    }
                 }
             }
+
+            // Stream completed without error — exit loop!
+            lastError = null;
+            break;
+
+        } catch (streamErr: any) {
+            lastError = streamErr;
+            console.warn(`[AGENT] ⚠️ Key [${i + 1}/${keys.length}] failed (${streamErr?.statusCode || streamErr?.message}).`);
+
+            // If tokens were already sent to the user's screen, do not restart mid-sentence
+            if (fullText.length > 0) {
+                break;
+            }
+
+            if (i < keys.length - 1) {
+                console.log(`[AGENT] 🔄 Switching to next API key in GEMINI_API_KEYS...`);
+            }
         }
-    } catch (streamErr: any) {
-        console.error('[AGENT] Stream aborted mid-turn:', streamErr.message || streamErr);
-        if (!fullText) {
-            fullText = 'حدث خطأ أثناء معالجة الطلب. هل يمكنك إعادة صياغة سؤالك؟';
-        }
+    }
+
+    if (lastError && !fullText) {
+        console.error('[AGENT] Stream aborted mid-turn (all keys exhausted):', lastError.message || lastError);
+        fullText = 'حدث خطأ أثناء معالجة الطلب. هل يمكنك إعادة صياغة سؤالك؟';
     }
 
     persistState(sessionId, state);
