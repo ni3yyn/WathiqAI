@@ -170,6 +170,7 @@ function ensureIndexedCatalog(products: any[]) {
         const nBrand = norm(p.brand);
         const catId = typeof p.category === 'object' ? (p.category?.id || '') : (p.category || '');
         const country = p.country || '';
+        const allTags = [...(p.marketingClaims || []), ...(p.targetTypes || [])].join(' ');
 
         indexedCatalog[i] = {
             idUpper,

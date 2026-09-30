@@ -187,23 +187,23 @@ export async function searchProducts(args: SearchProductsArgs) {
         // 4. Marketing Claims Match (Weight: 20)
         if (args.marketing_claims && args.marketing_claims.length > 0) {
             totalPossible += 20;
-            const userClaims = args.marketing_claims;
+            
+            // This translates ["brightening"] into ["تفتيح البشرة", "تفتيح البقع الداكنة", ...]
+            const expandedUserClaims = expandToCatalogClaims(args.marketing_claims);
             let matchedClaimsCount = 0;
 
-            userClaims.forEach(uc => {
-                if (allTags.some(t => matchesMultilingualCondition(t, uc))) {
+            // We check if ANY of the product's tags match the translated expanded claims
+            expandedUserClaims.forEach(expandedClaim => {
+                if (allTags.some(t => t.includes(expandedClaim) || expandedClaim.includes(t))) {
                     matchedClaimsCount++;
                 }
             });
 
-            // Also check expanded claims
-            expandedClaims.forEach(ec => {
-                if (allTags.some(t => t.includes(ec.toLowerCase()))) {
-                    matchedClaimsCount = Math.max(matchedClaimsCount, 1);
-                }
-            });
-
-            score += Math.min(20, (matchedClaimsCount / userClaims.length) * 20);
+            // If we found at least 1 match, grant proportional score (bonus for multiple matches)
+            if (matchedClaimsCount > 0) {
+                // Cap the maximum score at 20, but give at least 10 points for matching a primary claim
+                score += Math.min(20, 10 + (matchedClaimsCount * 5)); 
+            }
         }
 
         // 5. Price Constraints (Weight: 10)

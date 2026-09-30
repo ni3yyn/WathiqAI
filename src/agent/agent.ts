@@ -1,5 +1,6 @@
 import { groq } from '@ai-sdk/groq';
 import { google } from '@ai-sdk/google';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { streamText, generateText, tool, stepCountIs, smoothStream } from 'ai';
 import { z } from 'zod';
 import crypto from 'crypto';
@@ -64,11 +65,40 @@ export interface ChatRequest {
     sessionId?: string;
 }
 
+function getNextGeminiApiKey(): string | undefined {
+    const rawKeys = process.env.GEMINI_API_KEYS || process.env.GOOGLE_API_KEYS || '';
+    const keys = rawKeys
+        .split(',')
+        .map(k => k.replace(/['"\s]/g, '').trim())
+        .filter(Boolean);
+
+    // If numbered keys exist (GEMINI_API_KEY_1, GEMINI_API_KEY_2...)
+    for (let i = 1; i <= 20; i++) {
+        const k = process.env[`GEMINI_API_KEY_${i}`];
+        if (k && k.trim()) keys.push(k.replace(/['"\s]/g, '').trim());
+    }
+
+    if (keys.length === 0) {
+        return process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY;
+    }
+
+    // Pick a random key from your pool for each chat turn to distribute traffic!
+    return keys[Math.floor(Math.random() * keys.length)];
+}
+
 function resolveModel(provider?: string) {
     if (provider === 'gemini' || provider === 'google') {
         const geminiModel = process.env.GEMINI_AGENT_MODEL || 'gemini-3.5-flash-lite';
-        return google(geminiModel);
+        const apiKey = getNextGeminiApiKey();
+        
+        // Dynamically instantiate the Google provider with a rotated key!
+        const googleProvider = apiKey 
+            ? createGoogleGenerativeAI({ apiKey }) 
+            : createGoogleGenerativeAI();
+
+        return googleProvider(geminiModel);
     }
+    
     const groqModel = process.env.GROQ_AGENT_MODEL || 'openai/gpt-oss-120b';
     return groq(groqModel);
 }
@@ -579,7 +609,7 @@ function createAgentTools(state: AgentStateTracker, turnState: AgentStateTracker
                 category: z.string().optional().describe('Category e.g., skin_serum, cleanser, sunscreen, shampoo, lotion_cream, hair_mask, toner, scrub, eye_cream, body_wash'),
                 skin_type: z.string().optional().describe('Target skin condition e.g. oily, dry, acne, sensitive, بشرة دهنية, grasse'),
                 hair_type: z.string().optional().describe('Target hair condition e.g. dry, damaged, curly, oily, شعر تالف'),
-                marketing_claims: z.array(z.string()).optional().describe('List of claim concepts in any language e.g. ["brightening", "dark spots"]'),
+                marketing_claims: z.array(z.string()).optional().describe('List of claims. YOU MUST STRICTLY USE ONLY THESE EXACT ARABIC PHRASES (Do NOT use English or French): مضاد لتساقط الشعر, تعزيز النمو, تكثيف الشعر, فك التشابك, مرطب للشعر, مخصص للشعر الجاف, تغذية الشعر, ترطيب مكثف, مخصص للشعر الدهني, مضاد للقشرة, مكافحة التجعد, إصلاح الشعر المتضرر, تقوية الشعر, حماية من الحرارة, تلميع ولمعان, تنعيم الشعر, حماية اللون, تفتيح البشرة, توحيد لون البشرة, تفتيح البقع الداكنة, تفتيح تحت العين, مكافحة التجاعيد, شد البشرة, تحفيز الكولاجين, مضاد للأكسدة, مضاد لحب الشباب, مضاد للرؤوس السوداء, تنقية المسام, قابض للمسام, تنقية عميقة, توازن الدهون والزيوت, للبشرة الدهنية, للبشرة الجافة, مرطب للبشرة, للبشرة الحساسة, مهدئ, مضاد للالتهابات, تهدئة البشرة, تقشير لطيف, تقشير, تنظيف عميق, تنظيف لطيف, إزالة المكياج, توازن الحموضة, حماية من الشمس, حماية واسعة الطيف, مقاوم للماء, إزالة السيلوليت, شد الجسم.'),
                 active_ingredient: z.string().optional().describe('INCI active ingredient e.g., Niacinamide, Retinol, Salicylic Acid, Vitamin C'),
                 min_price: z.number().optional().describe('Minimum price in DZD'),
                 max_price: z.number().optional().describe('Maximum price in DZD'),
