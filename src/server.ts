@@ -6,6 +6,8 @@ import fs from 'fs';
 import path from 'path';
 import cron from 'node-cron';
 import { runAutonomousWorker } from './autonomous_worker';
+import { parseContributionImages } from './agent/contributionParser';
+
 
 dotenv.config();
 
@@ -26,6 +28,39 @@ server.get('/', async (request, reply) => {
         return reply.type('text/html').send(htmlContent);
     } catch (e) {
         return { status: 'ok', name: 'Wathiq Intelligence MVP Agent', endpoint: 'POST /api/chat' };
+    }
+});
+
+// ─── SMART PARSE ENDPOINT FOR CONTRIBUTIONS DASHBOARD ────────────────────────
+server.options('/api/parse-contribution', async (request, reply) => {
+    // Handle CORS preflight for React App
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type');
+    return reply.send();
+});
+
+server.post('/api/parse-contribution', async (request, reply) => {
+    // Add CORS for the actual POST request
+    reply.header('Access-Control-Allow-Origin', '*');
+    
+    try {
+        const body = request.body as any;
+        if (!body.frontImage && !body.inciImage) {
+            return reply.status(400).send({ error: 'Missing image URLs' });
+        }
+
+        const result = await parseContributionImages({
+            frontImage: body.frontImage,
+            inciImage: body.inciImage,
+            brandHint: body.brand,
+            nameHint: body.name
+        });
+
+        return reply.status(200).send(result);
+    } catch (error: any) {
+        console.error('[SERVER] Smart Parse Error:', error);
+        return reply.status(500).send({ error: 'Failed to parse images', details: error.message });
     }
 });
 
