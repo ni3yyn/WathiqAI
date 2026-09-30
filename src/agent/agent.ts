@@ -758,7 +758,7 @@ function createAgentTools(state: AgentStateTracker, turnState: AgentStateTracker
             execute: async (args: any) => {
                 console.log('[AGENT TOOL] Executing evaluate_product with args:', args);
                 try {
-                    const result = await evaluateProduct(args);
+                    const result: any = await evaluateProduct(args);
 
                     // --- ADD THIS BLOCK FOR CANDIDATE CARDS ---
                     if (result.candidates && result.candidates.length > 0) {
@@ -982,7 +982,7 @@ function createAgentTools(state: AgentStateTracker, turnState: AgentStateTracker
     && args.include_last_product) {
     if (state.lastProduct?.id) {
         requiredProducts = [{ id: state.lastProduct.id, name: state.lastProduct.name }];
-    } else if (state.lastProductResults?.length > 0) {
+    } else if (state.lastProductResults && state.lastProductResults.length > 0) {
         const top = state.lastProductResults[0];
         requiredProducts = [{ id: top.id, name: top.name }];
     }
@@ -1020,8 +1020,8 @@ function createAgentTools(state: AgentStateTracker, turnState: AgentStateTracker
                         // Give the model the exact list of included/omitted required
                         // products so it can confirm truthfully and mention anything
                         // that couldn't be placed — no guessing.
-                        includedRequired: result.includedRequired || null,
-                        requiredNotPlaced: result.requiredNotPlaced || null,
+                        includedRequired: (result as any).includedRequired || null,
+                        requiredNotPlaced: (result as any).requiredNotPlaced || null,
                     };
                 } catch (err: any) {
                     console.error('[AGENT TOOL] build_routine error:', err.message);
@@ -1347,7 +1347,7 @@ export async function streamChat(
 export async function processChat(request: ChatRequest) {
     const sessionId = deriveSessionKey(request);
     const state = getOrCreateState(sessionId);
-    const turnState: AgentStateTracker = { lastProductResults: null, lastProduct: null, lastAnalysis: null, lastRoutine: null, lastBrandEvaluation: null };
+    const turnState: AgentStateTracker = { lastProductResults: null, lastProduct: null, lastAnalysis: null, lastRoutine: null, lastBrandEvaluation: null, lastReviewData: null };
 
      const messages = await buildModelMessages(request, state);
     const tools = createAgentTools(state, turnState, request.message);
