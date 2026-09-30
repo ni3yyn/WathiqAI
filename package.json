@@ -1,13 +1,12 @@
 {
   "name": "WathiqAI",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "src/server.ts",
   "license": "MIT",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "tsx src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "tsx src/server.ts"
   },
   "dependencies": {
     "@ai-sdk/cohere": "^4.0.52",
