@@ -1,40 +1,37 @@
 import fastify from 'fastify';
-import { processChat, streamChat } from './agent/agent';
-import { getProducts } from './wathiq/backendClient';
+import cors from '@fastify/cors';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import cron from 'node-cron';
+
+import { processChat, streamChat } from './agent/agent';
+import { getProducts } from './wathiq/backendClient';
 import { runAutonomousWorker } from './autonomous_worker';
 import { parseContributionImages } from './agent/contributionParser';
-
 
 dotenv.config();
 
 const server = fastify({ logger: true });
 
-// ─── GLOBAL CORS HOOK (ALLOWS REACT / VITE TO TALK TO FASTIFY) ───────────────
-server.addHook('onRequest', async (request, reply) => {
-    reply.header('Access-Control-Allow-Origin', '*');
-    reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
-
-    // Instantly answer browser preflight OPTIONS requests with 204 No Content
-    if (request.method === 'OPTIONS') {
-        return reply.status(204).send();
-    }
+// ─── 1. FASTIFY CORS REGISTRATION (NO TOP-LEVEL AWAIT -> ZERO TS ERRORS) ─────
+server.register(cors, {
+    origin: true, // Dynamically reflects origin (localhost:3000, localhost:5173, production domains)
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
 });
 
-// ─── LIGHTWEIGHT HEALTH PING ENDPOINT ────────────────────────────────────────
+// ─── 2. LIGHTWEIGHT HEALTH PING ENDPOINT (FOR UPTIMEROBOT) ───────────────────
 server.get('/health', async (request, reply) => {
     return { status: 'alive', timestamp: Date.now(), uptime: process.uptime() };
 });
 
+// ─── 3. ROOT LANDING PAGE ───────────────────────────────────────────────────
 server.get('/', async (request, reply) => {
     try {
-        let htmlPath = path.join(__dirname, 'public', 'index.html');
+        let htmlPath = path.join(process.cwd(), 'public', 'index.html');
         if (!fs.existsSync(htmlPath)) {
-            htmlPath = path.join(__dirname, '..', 'src', 'public', 'index.html');
+            htmlPath = path.join(process.cwd(), 'src', 'public', 'index.html');
         }
         const htmlContent = fs.readFileSync(htmlPath, 'utf-8');
         return reply.type('text/html').send(htmlContent);
@@ -43,22 +40,11 @@ server.get('/', async (request, reply) => {
     }
 });
 
-// ─── SMART PARSE ENDPOINT FOR CONTRIBUTIONS DASHBOARD ────────────────────────
-server.options('/api/parse-contribution', async (request, reply) => {
-    // Handle CORS preflight for React App
-    reply.header('Access-Control-Allow-Origin', '*');
-    reply.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    reply.header('Access-Control-Allow-Headers', 'Content-Type');
-    return reply.send();
-});
-
+// ─── 4. SMART PARSE ENDPOINT FOR CONTRIBUTIONS DASHBOARD ────────────────────
 server.post('/api/parse-contribution', async (request, reply) => {
-    // Add CORS for the actual POST request
-    reply.header('Access-Control-Allow-Origin', '*');
-    
     try {
         const body = request.body as any;
-        if (!body.frontImage && !body.inciImage) {
+        if (!body || (!body.frontImage && !body.inciImage)) {
             return reply.status(400).send({ error: 'Missing image URLs' });
         }
 
@@ -72,10 +58,11 @@ server.post('/api/parse-contribution', async (request, reply) => {
         return reply.status(200).send(result);
     } catch (error: any) {
         console.error('[SERVER] Smart Parse Error:', error);
-        return reply.status(500).send({ error: 'Failed to parse images', details: error.message });
+        return reply.status(500).send({ error: 'Failed to parse images', details: error?.message || error });
     }
 });
 
+// ─── 5. CHAT ENDPOINT (SSE STREAMING + JSON FALLBACK) ───────────────────────
 server.post('/api/chat', async (request, reply) => {
     try {
         const body = request.body as any;
@@ -107,10 +94,9 @@ server.post('/api/chat', async (request, reply) => {
                     onTextDelta: (delta: string) => {
                         sendSSE({ type: 'text-delta', delta });
                     },
-                    // ADD THIS LINE: Send the card to the frontend immediately
-    onCardReady: (cardType: string, data: any) => {
-        sendSSE({ type: 'card', cardType, data });
-    }
+                    onCardReady: (cardType: string, data: any) => {
+                        sendSSE({ type: 'card', cardType, data });
+                    }
                 });
 
                 sendSSE({ type: 'finish', data: finalResult });
@@ -132,12 +118,12 @@ server.post('/api/chat', async (request, reply) => {
         return reply.status(500).send({
             type: 'error',
             message: 'An internal error occurred',
-            details: error.message
+            details: error?.message || error
         });
     }
 });
 
-// This schedules the worker to run autonomously every day at 3:00 AM
+// ─── 6. AUTONOMOUS NIGHTLY WORKER SCHEDULE (3:00 AM) ────────────────────────
 cron.schedule('0 3 * * *', async () => {
     try {
         await runAutonomousWorker();
@@ -148,11 +134,10 @@ cron.schedule('0 3 * * *', async () => {
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
+// ─── 7. SERVER STARTUP & CATALOG CACHE WARM-UP ───────────────────────────────
 const start = async () => {
     try {
-        // Warm the product catalog cache before opening the port. Without this,
-        // whichever user sends the first message after a cold start/deploy eats
-        // the full catalog fetch latency inline with their chat request.
+        // Warm the catalog cache before opening the port
         try {
             const products = await getProducts();
             server.log.info(`[STARTUP] Catalog warmed: ${products.length} products cached`);
@@ -169,4 +154,3 @@ const start = async () => {
 };
 
 start();
-runAutonomousWorker()
