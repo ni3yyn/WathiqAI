@@ -1,3 +1,4 @@
+<!-- path: src/public/index.html -->
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -1918,20 +1919,30 @@
                     <span>جرب سؤالا</span>
                 </div>
                 <div class="prompt-scenarios">
-                    <button onclick="sendPreset('ما رأيك في ماركة Belnco؟')" 
+                    <button onclick="sendPreset('ما رأيك في ماركة Belnco؟ وخصوصاً واقي الشمس تاعهم')" 
                         class="prompt-chip surface-card text-mist-600 hover:text-sage-800 text-left flex items-center gap-2 group" style="padding: 0.55rem 0.9rem; border-radius: 0.75rem; font-size: 0.78rem;">
                         <svg class="w-3.5 h-3.5 relative z-10 text-sage-500 group-hover:scale-110 transition-transform shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-award"/></svg>
-                        <span class="relative z-10 font-medium whitespace-nowrap">تقييم ماركة بيلنكو</span>
+                        <span class="relative z-10 font-medium whitespace-nowrap">ماركة + فئة معينة</span>
                     </button>
-                    <button onclick="sendPreset('حابة سيروم جزائري للبشرة الدهنية يدير جوايه 2000 ولا كثر  .')" 
+                    <button onclick="sendPreset('قارن بين آخر منتجين تحدثنا عنهما')" 
+                        class="prompt-chip surface-card text-mist-600 hover:text-sage-800 text-left flex items-center gap-2 group" style="padding: 0.55rem 0.9rem; border-radius: 0.75rem; font-size: 0.78rem;">
+                        <svg class="w-3.5 h-3.5 relative z-10 text-sage-500 group-hover:scale-110 transition-transform shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-search"/></svg>
+                        <span class="relative z-10 font-medium whitespace-nowrap">قارن بين منتجين</span>
+                    </button>
+                    <button onclick="sendPreset('افحص لي هذه المكونات: Water, Niacinamide, Glycerin, Phenoxyethanol, Fragrance, Alcohol Denat')" 
+                        class="prompt-chip surface-card text-mist-600 hover:text-sage-800 text-left flex items-center gap-2 group" style="padding: 0.55rem 0.9rem; border-radius: 0.75rem; font-size: 0.78rem;">
+                        <svg class="w-3.5 h-3.5 relative z-10 text-sage-500 group-hover:scale-110 transition-transform shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-microscope"/></svg>
+                        <span class="relative z-10 font-medium whitespace-nowrap">فحص مكونات خام</span>
+                    </button>
+                    <button onclick="sendPreset('ماذا يقول المجتمع عن منتجات بيلنكو بشكل عام؟')" 
+                        class="prompt-chip surface-card text-mist-600 hover:text-sage-800 text-left flex items-center gap-2 group" style="padding: 0.55rem 0.9rem; border-radius: 0.75rem; font-size: 0.78rem;">
+                        <svg class="w-3.5 h-3.5 relative z-10 text-sage-500 group-hover:scale-110 transition-transform shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-user"/></svg>
+                        <span class="relative z-10 font-medium whitespace-nowrap">نبض المجتمع</span>
+                    </button>
+                    <button onclick="sendPreset('حابة سيروم جزائري للبشرة الدهنية يدير جوايه 2000 ولا كثر.')" 
                         class="prompt-chip surface-card text-mist-600 hover:text-sage-800 text-left flex items-center gap-2 group" style="padding: 0.55rem 0.9rem; border-radius: 0.75rem; font-size: 0.78rem;">
                         <svg class="w-3.5 h-3.5 relative z-10 text-sage-500 group-hover:scale-110 transition-transform shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-flag"/></svg>
                         <span class="relative z-10 font-medium whitespace-nowrap">سيروم جزائري</span>
-                    </button>
-                    <button onclick="sendPreset('قيملي سيروم بيلنكو.')" 
-                        class="prompt-chip surface-card text-mist-600 hover:text-sage-800 text-left flex items-center gap-2 group" style="padding: 0.55rem 0.9rem; border-radius: 0.75rem; font-size: 0.78rem;">
-                        <svg class="w-3.5 h-3.5 relative z-10 text-sage-500 group-hover:scale-110 transition-transform shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-search"/></svg>
-                        <span class="relative z-10 font-medium whitespace-nowrap">سيروم بيلنكو</span>
                     </button>
                     <button onclick="sendPreset('قيّم سيروم بيلنكو المصفّي لادعاءات حب الشباب والتفتيح.')" 
                         class="prompt-chip surface-card text-mist-600 hover:text-sage-800 text-left flex items-center gap-2 group" style="padding: 0.55rem 0.9rem; border-radius: 0.75rem; font-size: 0.78rem;">
@@ -1957,8 +1968,8 @@
                     </div>
                     <div class="chat-prose">
                         <p class="font-bold text-sage-900" style="font-size: 1.08rem;">مرحبًا! أنا وثيق.</p>
-                        <p class="text-mist-600">يمكنني تحليل جودة وسلامة ومصداقية المنتجات وماركات العناية، أو فحص تقرير شامل لأي علامة تجارية بناءً على كتالوج منتجاتها الكامل.</p>
-                        <p class="text-mist-400" style="font-size: 0.85rem; margin-top: 0.6rem;">جرّب أن تسألني: "ما رأيك في ماركة بيلنكو؟" أو استفسر عن أي منتج محدد!</p>
+                        <p class="text-mist-600">أستطيع تقييم الماركات والمنتجات فعلياً، مقارنة 2–4 منتجات جنباً إلى جنب، فحص أي قائمة مكونات خام (INCI) حتى لو المنتج غير موجود في الكتالوج، سماع رأي المجتمع من TikTok، وبناء روتين كامل ضمن ميزانيتك.</p>
+                        <p class="text-mist-400" style="font-size: 0.85rem; margin-top: 0.6rem;">جرّب: "ما رأيك في ماركة بيلنكو وخصوصاً الغسول تاعهم؟" · "قارن بين هاذو" · أو الصق مكونات أي منتج.</p>
                     </div>
                 </div>
 
@@ -2415,7 +2426,8 @@ let currentEngine = 'gemini'; // Locked to Gemini while the switcher is hidden
                     </div>
                     <div class="chat-prose">
                         <p class="font-bold text-sage-900" style="font-size: 1.08rem;">تم مسح سجل المحادثة.</p>
-                        <p class="text-mist-600">كيف يمكنني مساعدتك اليوم؟</p>
+                        <p class="text-mist-600">أستطيع تقييم الماركات والمنتجات فعلياً، مقارنة 2–4 منتجات جنباً إلى جنب، فحص أي قائمة مكونات خام (INCI) حتى لو المنتج غير موجود في الكتالوج، سماع رأي المجتمع من TikTok، وبناء روتين كامل ضمن ميزانيتك.</p>
+                        <p class="text-mist-400" style="font-size: 0.85rem; margin-top: 0.6rem;">جرّب: "ما رأيك في ماركة بيلنكو وخصوصاً الغسول تاعهم؟" · "قارن بين هاذو" · أو الصق مكونات أي منتج.</p>
                     </div>
                 </div>
             `;
@@ -2738,43 +2750,59 @@ let currentEngine = 'gemini'; // Locked to Gemini while the switcher is hidden
                     const br = s.brandReview || s.review || s.data || s;
                     tags += `\n[Context: Brand Review shown for "${br.brand}" (Score: ${br.verdict?.avgScore}/100, Tier: ${br.verdict?.tier})]`;
                 }
+                if (s.type === 'comparison' && s.comparison) {
+                    const cmp = s.comparison;
+                    const w = cmp.winners || {};
+                    tags += `\n[Context: Comparison shown: ${(cmp.entries||[]).map(e => e.name).join(' vs ')} — overall winner: ${w.overall?.label || 'tie'}]`;
+                }
+                if (s.type === 'ingredient_check' && s.ingredientCheck) {
+                    tags += `\n[Context: Ingredient list checked (score: ${s.ingredientCheck.score}/100). Follow-ups like "which ingredient is the problem?" refer to this list.]`;
+                }
+                if (s.type === 'brand_reviews' && s.brandReviews) {
+                    tags += `\n[Context: Brand community reviews shown for "${s.brandReviews.brand}" (${s.brandReviews.products?.length || 0} products).]`;
+                }
+                if (s.type === 'community_reviews') {
+                    tags += `\n[Context: Community reviews shown for "${s.productName}" (satisfaction: ${s.satisfactionRate}%).]`;
+                }
             }
             return tags;
         }
 
         function renderSections(sections, legacyData) {
-    if (Array.isArray(sections) && sections.length > 0) {
-        return sections.map(s => {
-            if (s.type === 'product_results' && s.products?.length > 0) return renderProductsGrid(s.products);
-            if (s.type === 'product' && s.product) return renderProductsGrid([s.product]);
-            if (s.type === 'product_analysis' && s.analysis) return renderAnalysisCard(s.analysis, s.productName, s.brand, s.image);
-            if (s.type === 'routine' && s.routine) return renderRoutineCard(s.routine);
-            if (s.type === 'brand_evaluation' && s.brandEvaluation) return renderBrandReviewCard(s.brandEvaluation);
-            
-            // THIS IS THE FIX: Properly placed inside the active array map!
-            if (s.type === 'community_reviews') return renderCommunityReviewsCard(s);
-            
-            if ((s.type === 'brand_review' || s.type === 'brand_analysis') || s.brandReview) {
-                return renderBrandReviewCard(s.brandReview || s.review || s.data || s);
+            if (Array.isArray(sections) && sections.length > 0) {
+                return sections.map(s => {
+                    if (s.type === 'product_results' && s.products?.length > 0) return renderProductsGrid(s.products);
+                    if (s.type === 'product' && s.product) return renderProductsGrid([s.product]);
+                    if (s.type === 'product_analysis' && s.analysis) return renderAnalysisCard(s.analysis, s.productName, s.brand, s.image);
+                    if (s.type === 'routine' && s.routine) return renderRoutineCard(s.routine);
+                    if (s.type === 'brand_evaluation' && s.brandEvaluation) return renderBrandReviewCard(s.brandEvaluation);
+                    if (s.type === 'community_reviews') return renderCommunityReviewsCard(s);
+                    // ── v2 capabilities ──
+                    if (s.type === 'comparison') return renderComparisonCard(s.comparison || s.data || s);
+                    if (s.type === 'ingredient_check') return renderIngredientCheckCard(s.ingredientCheck || s.data || s);
+                    if (s.type === 'brand_reviews') return renderBrandReviewsCard(s.brandReviews || s.data || s);
+                    if ((s.type === 'brand_review' || s.type === 'brand_analysis') || s.brandReview) {
+                        return renderBrandReviewCard(s.brandReview || s.review || s.data || s);
+                    }
+                    return '';
+                }).join('');
+            }
+
+            const d = legacyData || {};
+            if (d.type === 'product_results' && d.products?.length > 0) return renderProductsGrid(d.products);
+            if (d.type === 'product' && d.product) return renderProductsGrid([d.product]);
+            if (d.type === 'product_analysis' && d.analysis) return renderAnalysisCard(d.analysis, d.productName, d.brand, d.image);
+            if (d.type === 'routine' && d.routine) return renderRoutineCard(d.routine);
+            if (d.type === 'community_reviews') return renderCommunityReviewsCard(d);
+            // ── v2 capabilities ──
+            if (d.type === 'comparison') return renderComparisonCard(d.comparison || d);
+            if (d.type === 'ingredient_check') return renderIngredientCheckCard(d.ingredientCheck || d);
+            if (d.type === 'brand_reviews') return renderBrandReviewsCard(d.brandReviews || d);
+            if ((d.type === 'brand_review' || d.type === 'brand_analysis') || d.brandReview) {
+                return renderBrandReviewCard(d.brandReview || d.review || d.data || d);
             }
             return '';
-        }).join('');
-    }
-
-    const d = legacyData || {};
-    if (d.type === 'product_results' && d.products?.length > 0) return renderProductsGrid(d.products);
-    if (d.type === 'product' && d.product) return renderProductsGrid([d.product]);
-    if (d.type === 'product_analysis' && d.analysis) return renderAnalysisCard(d.analysis, d.productName, d.brand, d.image);
-    if (d.type === 'routine' && d.routine) return renderRoutineCard(d.routine);
-    
-    // Fixed the variable name here too (d instead of s)
-    if (d.type === 'community_reviews') return renderCommunityReviewsCard(d);
-    
-    if ((d.type === 'brand_review' || d.type === 'brand_analysis') || d.brandReview) {
-        return renderBrandReviewCard(d.brandReview || d.review || d.data || d);
-    }
-    return '';
-}
+        }
         // ============================================================
         // BRAND REVIEW INTERACTIVE CARD (CLINICAL AUDIT DOSSIER)
         // ============================================================
@@ -3382,6 +3410,242 @@ let currentEngine = 'gemini'; // Locked to Gemini while the switcher is hidden
         </div>
     `;
 }
+        /* ============ COMPARISON CARD (compare_products) ============ */
+        function _scoreColor(v) {
+            return v == null ? '#a8b0a9' : (v >= 70 ? '#3f7249' : v >= 50 ? '#97641f' : '#a34141');
+        }
+
+        function renderComparisonCard(data) {
+            const c = (data && data.comparison) || data || {};
+            if (c.error) {
+                return `<div class="analysis-card" style="margin-top:0.5rem;">
+                    <div class="analysis-section-label">
+                        <svg class="icon" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>
+                        <span>تعذّرت المقارنة</span>
+                    </div>
+                    <div class="chat-prose" style="font-size:0.9rem;">${escapeHtml(c.error)}</div>
+                </div>`;
+            }
+            const entries = Array.isArray(c.entries) ? c.entries : [];
+            if (!entries.length) return '';
+
+            window.__PRODUCTS_MAP__ = window.__PRODUCTS_MAP__ || {};
+            entries.forEach(e => {
+                window.__PRODUCTS_MAP__[e.id] = Object.assign(
+                    {}, window.__PRODUCTS_MAP__[e.id] || {},
+                    { id: e.id, brand: e.brand, name: e.name }
+                );
+            });
+
+            const winners = c.winners || {};
+            const WIN_AR = { overall: 'الأفضل إجمالاً', safety: 'الأسلم', efficacy: 'الأكثر فعالية', cheapest: 'الأرخص' };
+            const winMap = {};
+            Object.keys(winners).forEach(k => {
+                if (winners[k] && winners[k].id) {
+                    (winMap[winners[k].id] = winMap[winners[k].id] || []).push(WIN_AR[k] || k);
+                }
+            });
+
+            const shared = Array.isArray(c.sharedActives) ? c.sharedActives : [];
+
+            const cellScore = v => v == null
+                ? '<span style="color:#a8b0a9;">—</span>'
+                : `<span style="font-weight:800;color:${_scoreColor(v)};">${v}</span><span style="font-size:10px;color:#a8b0a9;">/100</span>`;
+
+            let rows = '';
+            const addRow = (label, fn) => {
+                rows += `<tr><td style="font-weight:700;color:#5b635c;font-size:0.82rem;white-space:nowrap;">${label}</td>`;
+                entries.forEach(e => { rows += `<td>${fn(e)}</td>`; });
+                rows += `</tr>`;
+            };
+
+            addRow('السعر', e => `<span style="font-weight:700;color:#3f7249;">${escapeHtml(e.price || '—')}</span>`);
+            addRow('التقييم العام', e => cellScore(e.score));
+            addRow('السلامة', e => cellScore(e.safetyScore));
+            addRow('الفعالية', e => cellScore(e.efficacyScore));
+            addRow('مصداقية الادعاءات', e => e.claimsHonesty
+                ? `<span style="font-weight:700;color:#253d2c;">${escapeHtml(e.claimsHonesty)}</span>`
+                : '<span style="color:#a8b0a9;">—</span>');
+            addRow('المكونات الفعالة', e => (e.keyIngredients && e.keyIngredients.length)
+                ? e.keyIngredients.slice(0, 4).map(i => `<span class="claim-ingredient">${escapeHtml(i)}</span>`).join(' ')
+                : '<span style="color:#a8b0a9;">—</span>');
+            addRow('تحذيرات الحساسية', e => (e.allergenHits && e.allergenHits.length)
+                ? e.allergenHits.map(i => `<span class="acc-chip danger">${escapeHtml(i)}</span>`).join(' ')
+                : '<span style="color:#a8b0a9;">لا يوجد</span>');
+
+            let headCells = '';
+            entries.forEach(e => {
+                const nameRTL = isRTLText(e.name || '');
+                const wins = winMap[e.id] || [];
+                headCells += `<th style="white-space:normal;min-width:110px;">
+                    <div class="${nameRTL ? 'rtl-text' : ''}" ${nameRTL ? 'dir="rtl"' : ''} style="font-size:12px;text-transform:none;letter-spacing:0;color:#253d2c;cursor:pointer;" onclick="evaluateProductById('${escapeHtml(e.id)}')" title="اضغط لتقييم هذا المنتج">${escapeHtml(e.brand || '')}<br>${escapeHtml(e.name || '')}</div>
+                    ${wins.length ? `<div style="margin-top:4px;">${wins.map(w => `<span class="acc-chip safe" style="font-size:10px;padding:1px 6px;">🏆 ${w}</span>`).join('')}</div>` : ''}
+                </th>`;
+            });
+
+            const summaryHtml = c.summary ? `<div class="acc-note" style="margin:0 0 0.8rem;">${escapeHtml(c.summary)}</div>` : '';
+            const sharedHtml = shared.length ? `
+                <div style="margin-top:0.8rem;">
+                    <div style="font-size:0.82rem;font-weight:700;color:#475569;margin-bottom:0.4rem;">مكونات فعالة مشتركة</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:4px;">${shared.map(i => `<span class="acc-chip">${escapeHtml(i)}</span>`).join('')}</div>
+                </div>` : '';
+
+            return `<div class="analysis-card" style="margin-top:0.5rem;">
+                <div class="analysis-head" style="margin-bottom:0.7rem;">
+                    <div class="score-tile-icon" style="width:38px;height:38px;">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-search"/></svg>
+                    </div>
+                    <div style="flex:1;min-width:0;">
+                        <div class="analysis-brand">مقارنة وثيق الجانبية</div>
+                        <div class="analysis-product-name">${entries.length} منتجات بنفس المعايير</div>
+                    </div>
+                </div>
+                ${summaryHtml}
+                <div class="table-wrap"><table>
+                    <thead><tr><th>المعيار</th>${headCells}</tr></thead>
+                    <tbody>${rows}</tbody>
+                </table></div>
+                ${sharedHtml}
+            </div>`;
+        }
+
+        /* ============ INGREDIENT CHECK CARD (check_ingredient_list) ============ */
+        function renderIngredientCheckCard(data) {
+            const d = (data && data.ingredientCheck) || data || {};
+            if (d.error) {
+                return `<div class="analysis-card" style="margin-top:0.5rem;">
+                    <div class="analysis-section-label">
+                        <svg class="icon" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>
+                        <span>تعذّر فحص المكونات</span>
+                    </div>
+                    <div class="chat-prose" style="font-size:0.9rem;">${escapeHtml(d.error)}</div>
+                </div>`;
+            }
+
+            const score = typeof d.score === 'number' ? d.score : null;
+            const safety = typeof d.safetyScore === 'number' ? d.safetyScore : null;
+            const flags = Array.isArray(d.safetyFlags) ? d.safetyFlags : [];
+            const actives = Array.isArray(d.detectedActives) ? d.detectedActives : [];
+            const unknown = Array.isArray(d.unknownIngredients) ? d.unknownIngredients : [];
+            const allergens = Array.isArray(d.allergenHits) ? d.allergenHits : [];
+
+            const chips = (list, cls) => list.length
+                ? `<div style="display:flex;flex-wrap:wrap;gap:5px;">${list.map(i => `<span class="ingredient-chip ${cls || ''}">${escapeHtml(typeof i === 'string' ? i : (i.name || i.id || String(i)))}</span>`).join('')}</div>`
+                : '<div style="font-size:12px;color:#a8b0a9;font-style:italic;">لا يوجد</div>';
+
+            const allergenBox = allergens.length ? `
+                <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:0.75rem;padding:0.7rem 0.85rem;margin-bottom:0.85rem;">
+                    <div style="font-size:12px;font-weight:800;color:#b91c1c;margin-bottom:0.35rem;">⚠️ تنبيه حساسية — مكونات تتعارض مع ملفك</div>
+                    ${chips(allergens, 'ingredient-chip-unknown')}
+                </div>` : '';
+
+            return `<div class="analysis-card" style="margin-top:0.5rem;">
+                <div class="analysis-head">
+                    <div class="score-tile-icon" style="width:38px;height:38px;">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-microscope"/></svg>
+                    </div>
+                    <div style="flex:1;min-width:0;">
+                        <div class="analysis-brand">فحص قائمة مكونات (INCI)</div>
+                        <div class="analysis-product-name">منتج خارج الكتالوج</div>
+                    </div>
+                    <div style="flex-shrink:0;text-align:left;">
+                        <div class="analysis-score-label">المؤشر</div>
+                        <div style="display:flex;align-items:baseline;gap:4px;justify-content:flex-start;">
+                            <span class="analysis-score-number" style="color:${_scoreColor(score)}">${score ?? '—'}</span>
+                            <span class="analysis-score-unit">/100</span>
+                        </div>
+                    </div>
+                </div>
+                ${allergenBox}
+                <div class="score-row">
+                    <div class="score-tile">
+                        <div class="score-tile-icon"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-shield"/></svg></div>
+                        <div style="min-width:0;">
+                            <div class="score-tile-label">السلامة</div>
+                            <div class="score-tile-value" style="color:${_scoreColor(safety)};">${safety ?? '—'}<span class="unit">/100</span></div>
+                        </div>
+                    </div>
+                </div>
+                ${flags.length ? `
+                <div class="analysis-block">
+                    <div class="analysis-section-label">
+                        <svg class="icon" fill="none" stroke="currentColor"><use href="#i-alert"/></svg>
+                        <span>علامات السلامة</span><span class="analysis-section-count">${flags.length}</span>
+                    </div>
+                    ${chips(flags, 'ingredient-chip-unknown')}
+                </div>` : ''}
+                <div class="analysis-block">
+                    <div class="analysis-section-label">
+                        <svg class="icon" fill="none" stroke="currentColor"><use href="#i-droplet"/></svg>
+                        <span>المكونات الفعالة المكتشفة</span><span class="analysis-section-count">${actives.length}</span>
+                    </div>
+                    ${chips(actives)}
+                </div>
+                ${unknown.length ? `
+                <div class="analysis-block">
+                    <div class="analysis-section-label">
+                        <svg class="icon" fill="none" stroke="currentColor"><use href="#i-search"/></svg>
+                        <span>مكونات غير معروفة</span><span class="analysis-section-count">${unknown.length}</span>
+                    </div>
+                    ${chips(unknown, 'ingredient-chip-unknown')}
+                </div>` : ''}
+                ${d.personalizedNote ? `<div class="routine-tips"><div class="routine-tips-title">💡 ملاحظة شخصية</div><div class="routine-tip-item rtl-text" dir="rtl">${escapeHtml(d.personalizedNote)}</div></div>` : ''}
+            </div>`;
+        }
+
+        /* ============ BRAND REVIEWS CARD (get_community_reviews brandName scope) ============ */
+        function renderBrandReviewsCard(data) {
+            const b = (data && data.brandReviews) || data || {};
+            const brand = escapeHtml(b.brand || b.brandName || 'العلامة');
+            const prods = Array.isArray(b.products) ? b.products
+                : Array.isArray(b.perProduct) ? b.perProduct
+                : Array.isArray(b.breakdown) ? b.breakdown : [];
+            if (!prods.length) return '';
+
+            const avg = b.avgSatisfaction ?? b.averageSatisfaction ?? b.overallSatisfaction ?? null;
+            const total = b.totalReviews ?? b.totalComments ?? null;
+            const toneFor = r => r == null ? 'info' : r >= 75 ? 'safe' : r >= 50 ? 'warn' : 'danger';
+
+            let prodsHtml = '';
+            prods.forEach(p => {
+                const name = escapeHtml(p.name || p.productName || 'منتج');
+                const pid = p.id || p.productId || '';
+                const rate = p.satisfactionRate ?? p.avgSatisfaction ?? null;
+                const pros = Array.isArray(p.pros) ? p.pros : [];
+                const cons = Array.isArray(p.cons) ? p.cons : [];
+                const count = p.reviewCount ?? p.commentsUsed ?? null;
+                prodsHtml += `
+                <details class="acc-detail">
+                    <summary>
+                        <span class="acc-chip ${toneFor(rate)}" style="margin:0;">${rate != null ? Math.round(rate) + '%' : '—'}</span>
+                        <span class="acc-detail-name">${name}</span>
+                        <span class="acc-detail-count">${count != null ? count + ' رأي' : ''}</span>
+                    </summary>
+                    <div class="acc-detail-body">
+                        ${pros.length ? `<div class="acc-detail-label">👍 الإيجابيات</div><div>${pros.slice(0,4).map(x => `<span class="acc-chip safe">${escapeHtml(x)}</span>`).join('')}</div>` : ''}
+                        ${cons.length ? `<div class="acc-detail-label">⚠️ التحذيرات</div><div>${cons.slice(0,4).map(x => `<span class="acc-chip danger">${escapeHtml(x)}</span>`).join('')}</div>` : ''}
+                        ${p.summary ? `<div class="acc-detail-desc" style="margin-top:0.4rem;">${escapeHtml(p.summary)}</div>` : ''}
+                        ${pid ? `<div style="margin-top:0.4rem;"><span class="acc-prod-pill" onclick="evaluateProductById('${escapeHtml(pid)}')">تقييم المنتج كيميائياً ⚗️</span></div>` : ''}
+                    </div>
+                </details>`;
+            });
+
+            return `<div class="brand-review-card" style="margin-top:0.5rem;background:linear-gradient(180deg,#f8fafc 0%,#fff 100%);">
+                <div class="flex items-center justify-between mb-3 pb-3" style="border-bottom:1px solid #e2e8f0;">
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-size:10px;font-weight:700;color:#64748b;letter-spacing:0.05em;text-transform:uppercase;">نبض المجتمع حسب المنتج</div>
+                        <div style="font-size:15px;font-weight:800;color:#0f172a;" class="truncate">${brand}</div>
+                    </div>
+                    <div style="text-align:left;flex-shrink:0;">
+                        <div style="font-size:10px;font-weight:700;color:#64748b;">متوسط الرضا</div>
+                        <div style="font-size:24px;font-weight:800;color:${_scoreColor(avg)};line-height:1;">${avg != null ? Math.round(avg) + '%' : '—'}</div>
+                    </div>
+                </div>
+                <div style="font-size:11px;color:#94a3b8;font-weight:600;margin-bottom:0.5rem;">${total != null ? 'من أصل ' + total + ' رأي محلّل' : ''} · اضغط على أي منتج للتفاصيل</div>
+                ${prodsHtml}
+            </div>`;
+        }
+
         // ============================================================
         // PRODUCT ANALYSIS CARD
         // ============================================================

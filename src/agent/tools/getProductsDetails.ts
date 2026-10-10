@@ -26,7 +26,9 @@ export interface GetProductsDetailsResult {
  * the last routine/search shown).
  */
 export async function getProductsDetails(args: GetProductsDetailsArgs): Promise<GetProductsDetailsResult> {
-    const ids = (args.productIds || []).filter(Boolean);
+    // Dedupe + cap: a routine + search context can hand us the same id twice,
+    // and an unbounded list would blow the token budget on large routines.
+    const ids = [...new Set((args.productIds || []).filter(Boolean))].slice(0, 20);
 
     const lookups = await Promise.all(
         ids.map(id => getProduct({ productId: id }))

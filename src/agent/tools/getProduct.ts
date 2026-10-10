@@ -1,5 +1,6 @@
 import { getProducts } from '../../wathiq/backendClient';
 import { resolvePriceBounds, formatPriceDisplay } from '../priceUtils';
+import { normalizeArabicText } from '../taxonomy';
 
 export interface GetProductArgs {
     productId?: string;    // Exact product ID, partial ID, or ID fragment
@@ -26,18 +27,25 @@ export const ARABIC_BRAND_TRANSLITERATIONS: { [key: string]: string } = {
 };
 
 // ─── Normalization helper ────────────────────────────────────────────────────
+// Now layers the shared Arabic orthographic normalizer (alef variants,
+// taa-marbuta, yaa, tashkeel — see taxonomy.normalizeArabicText) UNDER the
+// Latin diacritic stripping, so "بشره"/"بشرة" and "CeraVe"/"cérave" all fold
+// to the same comparison form. The old version only handled Latin accents,
+// which is why diacritized or Darija-spelled queries silently missed.
 export function norm(s: any): string {
     if (!s) return '';
-    let text = String(s)
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')   // strip diacritics
+    let text = normalizeArabicText(
+        String(s)
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036F]/g, '')   // strip Latin diacritics
+    )
         .replace(/[^a-z0-9\u0600-\u06FF\s-]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 
     for (const [ar, en] of Object.entries(ARABIC_BRAND_TRANSLITERATIONS)) {
-        if (text.includes(ar)) {
+        if (text.includes(normalizeArabicText(ar))) {
             text += ` ${en}`;
         }
     }
@@ -140,6 +148,8 @@ function buildProduct(raw: any) {
 interface IndexedProduct {
     idUpper: string;
     idNorm: string;
+    /** ID with every non-alphanumeric char stripped — for dashless lookups. */
+    idSquashed: string;
     normName: string;
     normBrandName: string;
     normSearchable: string;
@@ -170,11 +180,11 @@ function ensureIndexedCatalog(products: any[]) {
         const nBrand = norm(p.brand);
         const catId = typeof p.category === 'object' ? (p.category?.id || '') : (p.category || '');
         const country = p.country || '';
-        const allTags = [...(p.marketingClaims || []), ...(p.targetTypes || [])].join(' ');
 
         indexedCatalog[i] = {
             idUpper,
             idNorm,
+            idSquashed: idNorm.replace(/[^a-z0-9]/g, ''),
             normName: nName,
             normBrandName: `${nBrand} ${nName}`,
             normSearchable: `${nBrand} ${nName} ${norm(catId)} ${norm(country)}`,
@@ -183,6 +193,20 @@ function ensureIndexedCatalog(products: any[]) {
         };
     }
 }
+
+/** Squash an ID-ish string the same way the index does (drop dashes/case). */
+function squashId(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** True when the query is a generic category word ("serum", "غسول", "كريم")
+ *  rather than a specific product — those must never auto-resolve to the
+ *  first catalog entry that happens to contain the word. */
+const GENERIC_SINGLE_WORDS = new Set([
+    'serum', 'سيروم', 'cleanser', 'غسول', 'منظف', 'cream', 'كريم', 'مرطب',
+    'moisturizer', 'sunscreen', 'واقي', 'shampoo', 'شامبو', 'toner', 'تونر',
+    'mask', 'ماسك', 'قناع', 'scrub', 'مقشر', 'lotion', 'huile', 'زيت', 'oil',
+]);
 
 // ─── Main lookup function ────────────────────────────────────────────────────
 export async function getProduct(args: GetProductArgs): Promise<{
@@ -210,31 +234,37 @@ export async function getProduct(args: GetProductArgs): Promise<{
     }
 
     // ── Strategy 2: Partial ID match ─────────────────────────────────────────
-    if (productId && (productId.includes('-') || productId.startsWith('DZ') || productId.startsWith('FR') || productId.startsWith('KR') || productId.startsWith('US'))) {
-        const normId = productId.toLowerCase().trim();
-        const partialMatches: any[] = [];
+    // Now also handles dashless / lowercase / pasted-fragment IDs by comparing
+    // squashed forms on both sides ("dzclebel002" matches "DZ-CLE-BEL-002").
+    if (productId) {
+        const squashedQuery = squashId(productId);
+        const looksIdish = squashedQuery.length >= 4
+            && (/[a-z]/.test(squashedQuery) && /\d/.test(squashedQuery));
 
-        for (let i = 0; i < indexedCatalog.length; i++) {
-            const item = indexedCatalog[i];
-            if (item.idNorm.includes(normId) || normId.includes(item.idNorm)) {
-                partialMatches.push(item.raw);
-                if (partialMatches.length > 5) break;
+        if (looksIdish) {
+            const partialMatches: any[] = [];
+            for (let i = 0; i < indexedCatalog.length; i++) {
+                const item = indexedCatalog[i];
+                if (item.idSquashed.includes(squashedQuery) || squashedQuery.includes(item.idSquashed)) {
+                    partialMatches.push(item.raw);
+                    if (partialMatches.length > 5) break;
+                }
             }
-        }
 
-        if (partialMatches.length === 1) {
-            console.log(`[GET_PRODUCT] Strategy 2 (partial ID): ${partialMatches[0].id}`);
-            return { found: true, matchStrategy: 'partial_id', product: buildProduct(partialMatches[0]) };
-        }
+            if (partialMatches.length === 1) {
+                console.log(`[GET_PRODUCT] Strategy 2 (partial ID): ${partialMatches[0].id}`);
+                return { found: true, matchStrategy: 'partial_id', product: buildProduct(partialMatches[0]) };
+            }
 
-        if (partialMatches.length > 1) {
-            const candidates = partialMatches.map(p => formatCandidateForUI(p));
-            return {
-                found: false,
-                matchStrategy: 'ambiguous_id',
-                candidates,
-                suggestion: `Multiple products match "${productId}". Which one did you mean?`
-            };
+            if (partialMatches.length > 1) {
+                const candidates = partialMatches.map(p => formatCandidateForUI(p));
+                return {
+                    found: false,
+                    matchStrategy: 'ambiguous_id',
+                    candidates,
+                    suggestion: `Multiple products match "${productId}". Which one did you mean?`
+                };
+            }
         }
     }
 
@@ -247,15 +277,40 @@ export async function getProduct(args: GetProductArgs): Promise<{
     const normSearch = norm(searchText);
 
     // ── Strategy 3: Fast Pre-Indexed Exact Name match ────────────────────────
-    for (let i = 0; i < indexedCatalog.length; i++) {
-        const item = indexedCatalog[i];
-        if (
-            item.normName === normSearch ||
-            item.normBrandName === normSearch ||
-            item.normName.includes(normSearch)
-        ) {
-            console.log(`[GET_PRODUCT] Strategy 3 (exact/sub name): ${item.raw.id}`);
-            return { found: true, matchStrategy: 'exact_name', product: buildProduct(item.raw) };
+    // FIX: the old code also accepted `normName.includes(normSearch)`, which
+    // made any generic one-word query ("serum", "غسول") resolve to the FIRST
+    // catalog product containing that word — a confident-looking but random
+    // answer. Now:
+    //   • full-string equality (name or brand+name) → still an instant hit
+    //   • substring containment → collect ALL hits; auto-resolve only when it
+    //     is unique AND the query isn't a generic category word; otherwise
+    //     fall through to scored matching / ambiguous candidates.
+    if (normSearch) {
+        for (let i = 0; i < indexedCatalog.length; i++) {
+            const item = indexedCatalog[i];
+            if (item.normName === normSearch || item.normBrandName === normSearch) {
+                console.log(`[GET_PRODUCT] Strategy 3 (exact name): ${item.raw.id}`);
+                return { found: true, matchStrategy: 'exact_name', product: buildProduct(item.raw) };
+            }
+        }
+
+        const qTokenCount = normSearch.split(' ').filter(t => t.length > 1).length;
+        const isGenericSingle = qTokenCount <= 1 && GENERIC_SINGLE_WORDS.has(normSearch);
+
+        if (!isGenericSingle) {
+            const containmentHits: IndexedProduct[] = [];
+            for (let i = 0; i < indexedCatalog.length; i++) {
+                const item = indexedCatalog[i];
+                if (item.normName.includes(normSearch) && normSearch.length >= 4) {
+                    containmentHits.push(item);
+                    if (containmentHits.length > 4) break;
+                }
+            }
+            if (containmentHits.length === 1) {
+                console.log(`[GET_PRODUCT] Strategy 3b (unique substring): ${containmentHits[0].raw.id}`);
+                return { found: true, matchStrategy: 'unique_substring', product: buildProduct(containmentHits[0].raw) };
+            }
+            // Multiple containment hits → let Strategy 4/5 rank them properly.
         }
     }
 

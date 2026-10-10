@@ -1,3 +1,4 @@
+// path: src/groq/client.ts
 import Groq from 'groq-sdk';
 import dotenv from 'dotenv';
 

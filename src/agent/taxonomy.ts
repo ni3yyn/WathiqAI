@@ -5,18 +5,70 @@
 
 import fs from 'fs';
 import path from 'path';
+import { LEARNED_TAXONOMY_FILE } from '../paths';
 
+// Safely loads dynamically learned words patched by the autonomous worker.
+// Reads the shared path first, then the legacy __dirname location.
+let learnedCache: Record<string, string[]> = {};
+let learnedMtime = -1;
 
-// Safely loads dynamically learned words patched by the autonomous worker
-function loadLearnedAliases(canonicalKey: string): string[] {
-    try {
-        const filePath = path.join(__dirname, 'learned_taxonomy.json');
-        if (fs.existsSync(filePath)) {
+function readLearnedFile(): Record<string, string[]> {
+    const candidates = [LEARNED_TAXONOMY_FILE, path.join(__dirname, 'learned_taxonomy.json')];
+    const merged: Record<string, string[]> = {};
+    for (const filePath of candidates) {
+        try {
+            if (!fs.existsSync(filePath)) continue;
             const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-            return data[canonicalKey] || [];
-        }
-    } catch (e) {}
-    return [];
+            for (const [k, v] of Object.entries(data)) {
+                if (Array.isArray(v)) merged[k] = Array.from(new Set([...(merged[k] || []), ...(v as string[])]));
+            }
+        } catch (e) { /* ignore corrupt file */ }
+    }
+    return merged;
+}
+
+function learnedSignature(): number {
+    let sig = 0;
+    for (const filePath of [LEARNED_TAXONOMY_FILE, path.join(__dirname, 'learned_taxonomy.json')]) {
+        try { if (fs.existsSync(filePath)) sig += fs.statSync(filePath).mtimeMs; } catch { /* ignore */ }
+    }
+    return sig;
+}
+
+function loadLearnedAliases(canonicalKey: string): string[] {
+    learnedCache = readLearnedFile();
+    learnedMtime = learnedSignature();
+    return learnedCache[canonicalKey] || [];
+}
+
+// ─── 0. SHARED ARABIC-AWARE TEXT NORMALIZER ──────────────────────────────────
+//
+// Single source of truth for comparing Arabic/Darija/Latin mixed text. The
+// catalog and user messages disagree on orthography constantly:
+//   أ / إ / آ / ٱ / ا   (alef variants — hamza placement is inconsistent)
+//   ة / ه                (taa marbuta vs haa — the #1 Darija typo source)
+//   ى / ي / ئ            (alef maqsura / yaa)
+//   ؤ / و                (hamza on waw)
+//   tashkeel + tatweel   (diacritics silently break substring matching)
+//   é / è / ê ...        (Latin accents on French brand/category names)
+//
+// Without this, "بشره دهنيه" never matches the catalog tag "بشرة دهنية", and
+// "غارنيي" (no shadda) never matches "غارنيّة". Every matcher that compares
+// user text against catalog text should run BOTH sides through this first.
+export function normalizeArabicText(text: any): string {
+    return String(text ?? '')
+        .normalize('NFKC')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036F]/g, '')   // Latin accents
+        .normalize('NFKC')
+        .replace(/[\u064B-\u065F\u0670\u0640]/g, '') // tashkeel + tatweel
+        .replace(/[أإآٱ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/[ىئ]/g, 'ي')
+        .replace(/ؤ/g, 'و')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 // ─── 1. COUNTRIES ─────────────────────────────────────────────────────────────
@@ -252,6 +304,44 @@ export function normalizeCategory(raw?: string): string | undefined {
     if (!raw) return undefined;
     const clean = raw.trim().toLowerCase();
     return CATEGORY_MAP[clean] || clean;
+}
+
+// Aliases sorted longest-first so "واقي شمس" beats "واقي" and "hair serum"
+// beats "serum" when scanning free text.
+const CATEGORY_ALIASES_SORTED: Array<{ alias: string; canonical: string }> =
+    Object.entries(CATEGORY_MAP)
+        .map(([alias, canonical]) => ({ alias, canonical }))
+        .sort((a, b) => b.alias.length - a.alias.length);
+
+function lightFold(text: string): string {
+    return String(text || '')
+        .normalize('NFKC').normalize('NFD')
+        .replace(/[\u0300-\u036F]/g, '')                    // Latin accents
+        .normalize('NFKC')
+        .replace(/[\u064B-\u065F\u0670\u0640]/g, '')      // Arabic diacritics + tatweel
+        .replace(/[أإآٱ]/g, 'ا').replace(/ة/g, 'ه')
+        .replace(/[ىئ]/g, 'ي').replace(/ؤ/g, 'و')
+        .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+const CATEGORY_ALIASES_FOLDED: Array<{ folded: string; canonical: string }> =
+    CATEGORY_ALIASES_SORTED.map(({ alias, canonical }) => ({ folded: lightFold(alias), canonical }));
+
+/**
+ * Scans a free-text user message for a category mention ("sunscreen",
+ * "واقي الشمس", "غسول", "crème solaire"...) and returns the canonical
+ * category id, or undefined when nothing matches. Orthographic-folded on
+ * both sides so tashkeel/alef/taa-marbuta variants match.
+ */
+export function detectCategoryInText(rawText?: string): string | undefined {
+    if (!rawText) return undefined;
+    const folded = ` ${lightFold(rawText)} `;
+    for (const { folded: alias, canonical } of CATEGORY_ALIASES_FOLDED) {
+        if (alias.length > 1 && folded.includes(` ${alias} `)) return canonical;
+        // Loose fallback for multi-word aliases at string edges
+        if (alias.length > 2 && folded.includes(alias)) return canonical;
+    }
+    return undefined;
 }
 
 // ─── 3. SKIN & HAIR TYPES (CANONICAL ARABIC DATABASE TARGET TYPES) ─────────────
@@ -591,26 +681,35 @@ export function normalizeClaimToCatalog(claim: string): string | undefined {
  */
 export function matchesMultilingualCondition(catalogTag: string, userQueryOrCondition: string): boolean {
     if (!catalogTag || !userQueryOrCondition) return false;
-    const tag = catalogTag.toLowerCase().trim();
-    const cond = userQueryOrCondition.toLowerCase().trim();
+    // Normalize BOTH sides orthographically (alef/taa-marbuta/yaa variants,
+    // tashkeel, Latin accents) before any comparison — a diacritized or
+    // Darija-spelled condition must still match the canonical catalog tag.
+    const tag = normalizeArabicText(catalogTag);
+    const cond = normalizeArabicText(userQueryOrCondition);
 
     // Direct contains
     if (tag.includes(cond) || cond.includes(tag)) return true;
 
     // Check skin/hair target mappings
     for (const mapping of TARGET_TYPE_MAPPINGS) {
-        const matchesCondition = mapping.aliases.some(alias => cond.includes(alias.toLowerCase()));
+        const matchesCondition = mapping.aliases.some(alias => cond.includes(normalizeArabicText(alias)));
         if (matchesCondition) {
-            const matchesTag = mapping.catalogTags.some(catTag => tag.includes(catTag.toLowerCase()) || catTag.toLowerCase().includes(tag));
+            const matchesTag = mapping.catalogTags.some(catTag => {
+                const ct = normalizeArabicText(catTag);
+                return tag.includes(ct) || ct.includes(tag);
+            });
             if (matchesTag) return true;
         }
     }
 
     // Check claim mappings
     for (const mapping of CLAIM_MAPPINGS) {
-        const matchesCondition = mapping.aliases.some(alias => cond.includes(alias.toLowerCase()));
+        const matchesCondition = mapping.aliases.some(alias => cond.includes(normalizeArabicText(alias)));
         if (matchesCondition) {
-            const matchesTag = mapping.catalogClaims.some(catClaim => tag.includes(catClaim.toLowerCase()) || catClaim.toLowerCase().includes(tag));
+            const matchesTag = mapping.catalogClaims.some(catClaim => {
+                const cc = normalizeArabicText(catClaim);
+                return tag.includes(cc) || cc.includes(tag);
+            });
             if (matchesTag) return true;
         }
     }
@@ -624,25 +723,58 @@ export function matchesMultilingualCondition(catalogTag: string, userQueryOrCond
 export function expandToCatalogClaims(inputClaims: string[]): string[] {
     const matched = new Set<string>();
     for (const claim of inputClaims) {
-        const cLow = claim.toLowerCase().trim();
-        
+        const cLow = normalizeArabicText(claim);
+        if (!cLow) continue;
+
         // 1. Add the raw claim just in case
         matched.add(cLow);
 
         // 2. Direct match against catalog
-        const direct = WATHIQ_CATALOG_CLAIMS.find(c => c.toLowerCase().includes(cLow) || cLow.includes(c.toLowerCase()));
+        const direct = WATHIQ_CATALOG_CLAIMS.find(c => {
+            const cn = normalizeArabicText(c);
+            return cn.includes(cLow) || cLow.includes(cn);
+        });
         if (direct) {
             matched.add(direct.toLowerCase());
         }
 
         // 3. Translate via aliases (English/French/Darija -> Arabic)
         for (const mapping of CLAIM_MAPPINGS) {
-            const isMatch = mapping.aliases.some(a => cLow.includes(a.toLowerCase()) || a.toLowerCase().includes(cLow)) ||
-                            mapping.catalogClaims.some(c => cLow.includes(c.toLowerCase()) || c.toLowerCase().includes(cLow));
+            const isMatch = mapping.aliases.some(a => {
+                const an = normalizeArabicText(a);
+                return an.length > 1 && (cLow.includes(an) || an.includes(cLow));
+            }) || mapping.catalogClaims.some(c => {
+                const cn = normalizeArabicText(c);
+                return cLow.includes(cn) || cn.includes(cLow);
+            });
             if (isMatch) {
                 mapping.catalogClaims.forEach(cc => matched.add(cc.toLowerCase()));
             }
         }
     }
     return Array.from(matched);
+}
+
+
+// ─── HOT-RELOAD OF LEARNED DIALECT WORDS ─────────────────────────────────────
+// CLAIM_MAPPINGS is built once at import time, so words the nightly worker
+// learned only took effect after a server restart — and the worker also writes
+// keys (soothing, cleansing_exfoliating) the original loader never merged.
+// This snapshots each mapping's built-in aliases once, then (cheap mtime check)
+// rebuilds `aliases = base + learned` whenever the learned file changes.
+const BASE_ALIASES = new Map<string, string[]>(
+    CLAIM_MAPPINGS.map(m => [m.canonical, [...m.aliases]])
+);
+
+export function reloadLearnedAliasesIfChanged(): boolean {
+    const sig = learnedSignature();
+    if (sig === learnedMtime) return false;
+    learnedCache = readLearnedFile();
+    learnedMtime = sig;
+    for (const mapping of CLAIM_MAPPINGS) {
+        const base = BASE_ALIASES.get(mapping.canonical) || [];
+        const learned = learnedCache[mapping.canonical] || [];
+        mapping.aliases = Array.from(new Set([...base, ...learned]));
+    }
+    return true;
 }

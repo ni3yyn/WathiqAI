@@ -1,3 +1,4 @@
+// path: src/review cllctor/community_collector.ts
 import fs from 'fs';
 import path from 'path';
 import { google } from '@ai-sdk/google';

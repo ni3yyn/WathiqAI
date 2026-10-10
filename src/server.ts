@@ -9,6 +9,8 @@ import { processChat, streamChat } from './agent/agent';
 import { getProducts } from './wathiq/backendClient';
 import { runAutonomousWorker } from './autonomous_worker';
 import { parseContributionImages } from './agent/contributionParser';
+import { sessionMemory } from './agent/sessionMemory';
+import { forgetUser, LONGTERM_ENABLED } from './agent/longterm';
 
 dotenv.config();
 
@@ -23,7 +25,12 @@ server.register(cors, {
 
 // ─── 2. LIGHTWEIGHT HEALTH PING ENDPOINT (FOR UPTIMEROBOT) ───────────────────
 server.get('/health', async (request, reply) => {
-    return { status: 'alive', timestamp: Date.now(), uptime: process.uptime() };
+    return {
+        status: 'alive',
+        timestamp: Date.now(),
+        uptime: process.uptime(),
+        sessions: sessionMemory.stats(), // per-session memory diagnostics
+    };
 });
 
 // ─── 3. ROOT LANDING PAGE ───────────────────────────────────────────────────
@@ -82,7 +89,15 @@ server.post('/api/chat', async (request, reply) => {
                 'Access-Control-Allow-Origin': '*'
             });
 
+            // Client closed the tab / connection dropped → stop generating
+            // (the old code kept streaming and burning model tokens).
+            const abortController = new AbortController();
+            reply.raw.on('close', () => {
+                if (!reply.raw.writableEnded) abortController.abort();
+            });
+
             const sendSSE = (eventData: any) => {
+                if (reply.raw.writableEnded || reply.raw.destroyed) return;
                 reply.raw.write(`data: ${JSON.stringify(eventData)}\n\n`);
             };
 
@@ -97,14 +112,14 @@ server.post('/api/chat', async (request, reply) => {
                     onCardReady: (cardType: string, data: any) => {
                         sendSSE({ type: 'card', cardType, data });
                     }
-                });
+                }, { abortSignal: abortController.signal });
 
                 sendSSE({ type: 'finish', data: finalResult });
             } catch (err: any) {
                 console.error('[AGENT] Stream error:', err);
                 sendSSE({ type: 'error', message: err.message || 'Stream processing failed' });
             } finally {
-                reply.raw.end();
+                if (!reply.raw.writableEnded) reply.raw.end();
             }
 
             return;
@@ -121,6 +136,17 @@ server.post('/api/chat', async (request, reply) => {
             details: error?.message || error
         });
     }
+});
+
+// ─── 5b. OPT-IN MEMORY: ERASE EVERYTHING WE STORED FOR A USER ───────────────
+// Works even when LONGTERM_MEMORY is currently off, so consent can always be withdrawn.
+server.post('/api/memory/forget', async (request, reply) => {
+    const body = request.body as any;
+    if (!body || typeof body.userId !== 'string' || !body.userId) {
+        return reply.status(400).send({ error: 'Missing userId' });
+    }
+    const erased = forgetUser(body.userId);
+    return reply.status(200).send({ ok: true, erased, memoryEnabled: LONGTERM_ENABLED });
 });
 
 // ─── 6. AUTONOMOUS NIGHTLY WORKER SCHEDULE (3:00 AM) ────────────────────────

@@ -47,10 +47,15 @@ export async function evaluateProduct(args: EvaluateProductArgs) {
     });
 
     if (!productResult.found || !productResult.product) {
+        // FIX: return the candidates ARRAY (the old code flattened them into
+        // the error string). agent.ts checks `result.candidates` to stream
+        // clickable candidate cards — with the string-only shape that branch
+        // was dead code and ambiguous matches looked like hard failures.
         if (productResult.candidates && productResult.candidates.length > 0) {
             const list = productResult.candidates.map(c => `${c.brand} - ${c.name} (${c.id})`).join('\n');
-            return { 
-                error: `Could not determine the exact product for "${lookupKey}". Candidates found:\n${list}` 
+            return {
+                error: `Could not determine the exact product for "${lookupKey}". Candidates found:\n${list}`,
+                candidates: productResult.candidates
             };
         }
         return { error: `Product not found: "${lookupKey}". Please specify a known product name or ID.` };
@@ -68,6 +73,19 @@ export async function evaluateProduct(args: EvaluateProductArgs) {
             .filter((s: string) => s.length > 1);
     } else if (Array.isArray(product.ingredients)) {
         ingredientsList = product.ingredients.map((s: any) => String(s).trim()).filter((s: string) => s.length > 1);
+    }
+
+    // Guard: a product with no usable INCI list cannot be scored — say so
+    // explicitly instead of sending an empty list to the backend and
+    // returning a meaningless 0-ish score.
+    if (ingredientsList.length === 0) {
+        return {
+            error: `المنتج "${product.brand} ${product.name}" موجود في الكتالوج لكن قائمة مكوناته غير متوفرة، لذا لا يمكن تحليل تركيبته.`,
+            productId: product.id,
+            name: product.name,
+            brand: product.brand,
+            noIngredients: true
+        };
     }
 
     // 3. Normalize product type for the backend
@@ -99,8 +117,11 @@ export async function evaluateProduct(args: EvaluateProductArgs) {
     console.log(`[EVALUATE] product_type: "${productType}"`);
     console.log(`[EVALUATE] ingredients_count: ${ingredientsList.length}`);
     console.log(`[EVALUATE] selected_claims: ${JSON.stringify(selectedClaims)}`);
+    if (payload.user_profile.allergies.length > 0 || payload.user_profile.skinType) {
+        console.log(`[EVALUATE] user_profile: ${JSON.stringify(payload.user_profile)}`);
+    }
 
-    // 6. Call the Wathiq evaluation API
+    // 6. Call the Wathiq evaluation API (hard timeout lives in backendClient)
     try {
         const evaluationResult = await wathiqEvaluate(payload);
 

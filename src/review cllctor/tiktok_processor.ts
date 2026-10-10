@@ -1,3 +1,4 @@
+// path: src/review cllctor/tiktok_processor.ts
 import fs from 'fs';
 import path from 'path';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';

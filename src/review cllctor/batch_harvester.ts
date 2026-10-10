@@ -1,3 +1,4 @@
+// path: src/review cllctor/batch_harvester.ts
 import path from 'path';
 import { Page } from 'playwright';
 import dotenv from 'dotenv';

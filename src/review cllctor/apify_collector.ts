@@ -1,3 +1,4 @@
+// path: src/review cllctor/apify_collector.ts
 import { ApifyClient } from 'apify-client';
 import { processTikTokComments } from './tiktok_processor';
 import dotenv from 'dotenv';

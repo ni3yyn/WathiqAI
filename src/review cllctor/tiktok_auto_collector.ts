@@ -1,3 +1,4 @@
+// path: src/review cllctor/tiktok_auto_collector.ts
 import { chromium, BrowserContext, Page } from 'playwright';
 import path from 'path';
 import dotenv from 'dotenv';
