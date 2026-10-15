@@ -223,6 +223,7 @@ export async function searchProducts(args: SearchProductsArgs) {
     const expandedUserClaims = args.marketing_claims?.length
         ? expandToCatalogClaims(args.marketing_claims)
         : [];
+    const requestedClaimSet = new Set(expandedUserClaims.map(claim => normalizeArabicText(claim)).filter(Boolean));
 
     let scoredProducts = pool.map(p => {
         let score = 0;
@@ -232,7 +233,7 @@ export async function searchProducts(args: SearchProductsArgs) {
         // Precomputed once per product (see searchIndex.ts) — no per-query
         // Arabic normalization of the whole catalog anymore.
         const entry = getSearchEntry(p);
-        const { pIng, allTags, allTagsNorm, bounds, searchable: searchableText } = entry;
+        const { pIng, allTags, marketingClaimsNorm, bounds, searchable: searchableText } = entry;
 
         // 1. Query Token Match (Weight: 35) — Arabic-normalized on both sides.
         if (args.query) {
@@ -273,22 +274,8 @@ export async function searchProducts(args: SearchProductsArgs) {
         // 4. Marketing Claims Match (Weight: 20)
         if (expandedUserClaims.length > 0) {
             totalPossible += 20;
-
-            let matchedClaimsCount = 0;
-
-            // We check if ANY of the product's tags match the translated expanded claims
-            expandedUserClaims.forEach(expandedClaim => {
-                const ec = normalizeArabicText(expandedClaim);
-                if (allTagsNorm.some(t => t.includes(ec) || ec.includes(t))) {
-                    matchedClaimsCount++;
-                }
-            });
-
-            // If we found at least 1 match, grant proportional score (bonus for multiple matches)
-            if (matchedClaimsCount > 0) {
-                // Cap the maximum score at 20, but give at least 10 points for matching a primary claim
-                score += Math.min(20, 10 + (matchedClaimsCount * 5));
-            }
+            const matchedClaimsCount = marketingClaimsNorm.filter(claim => requestedClaimSet.has(claim)).length;
+            if (matchedClaimsCount > 0) score += Math.min(20, 10 + (matchedClaimsCount * 5));
         }
 
         // 5. Price Constraints (Weight: 10)
@@ -307,8 +294,29 @@ export async function searchProducts(args: SearchProductsArgs) {
         }
 
         const matchPercentage = totalPossible > 0 ? Math.round((score / totalPossible) * 100) : 100;
-        return { product: p, score, matchPercentage, queryTokensMatched, bounds };
+        const matchedClaimsCount = marketingClaimsNorm.filter(claim => requestedClaimSet.has(claim)).length;
+        return { product: p, score, matchPercentage, queryTokensMatched, matchedClaimsCount, bounds };
     });
+
+    // A requested marketing claim is an explicit product requirement, not a
+    // weak ranking hint. Never return products tagged only for a different claim.
+    if (requestedClaimSet.size > 0) {
+        const claimMatches = scoredProducts.filter(item => item.matchedClaimsCount > 0);
+        if (claimMatches.length === 0) {
+            return {
+                foundCount: 0,
+                returnedCount: 0,
+                products: [],
+                appliedFilters,
+                relaxedFilters,
+                hasMore: false,
+                nextOffset: null,
+                fallbackMessage: `No catalog products are tagged with the requested claim(s): ${(args.marketing_claims || []).join(', ')}.`,
+            };
+        }
+        scoredProducts = claimMatches;
+        appliedFilters.push(`marketing_claims=${(args.marketing_claims || []).join('|')}`);
+    }
 
     // ─── STEP 4: STRICT INGREDIENT SAFEGUARD ─────────────────────────────────
     if (args.active_ingredient) {
@@ -351,22 +359,10 @@ export async function searchProducts(args: SearchProductsArgs) {
     );
 
     // ─── RELAXATION LADDER ───────────────────────────────────────────────────
-    // If over-constrained, relax the SOFTEST constraint first (claims, then
-    // condition targeting) and re-run the validity filter — rather than
-    // showing the user an empty list when the catalog simply can't satisfy
-    // every wish at once. Exclusions and prices are NEVER relaxed.
+    // If over-constrained, relax condition targeting only. Explicit claim
+    // requests, exclusions, and prices are never relaxed silently.
     if (validResults.length === 0 && (args.marketing_claims?.length || targetConditions.length > 0)) {
-        // Relaxation 1: drop claim scoring
-        if (args.marketing_claims?.length) {
-            const relaxed = scoredProducts.filter(item =>
-                item.score > 0 || (!args.query && !args.active_ingredient)
-            );
-            if (relaxed.length > 0) {
-                validResults = relaxed;
-                relaxedFilters.push('marketing_claims');
-            }
-        }
-        // Relaxation 2: still empty and query-less → show the filtered pool
+        // Still empty and query-less → relax skin/hair targeting only.
         if (validResults.length === 0 && !args.query && !args.active_ingredient) {
             validResults = scoredProducts.filter(item => item.score >= 0);
             if (validResults.length > 0 && targetConditions.length > 0) {
@@ -405,7 +401,10 @@ export async function searchProducts(args: SearchProductsArgs) {
         appliedFilters,
         relaxedFilters,
         hasMore,
-        nextOffset: hasMore ? offset + limit : null
+        nextOffset: hasMore ? offset + limit : null,
+        // Honesty about incomplete price data: how many shown products have no
+        // price on file (they are NOT excluded by a budget — we just can't verify it).
+        unpricedCount: results.filter(r => !r.priceKnown).length,
     };
 }
 
@@ -428,6 +427,7 @@ function formatProductForUI(p: any, bounds: PriceBounds) {
         categoryLabel: typeof p.category === 'object' ? p.category?.label : null,
         quantity: displayQty,
         price: displayPrice,
+        priceKnown: bounds.min !== undefined || bounds.max !== undefined,
         currency: bounds.currency,
         image: p.image,
         claims: p.marketingClaims || [],

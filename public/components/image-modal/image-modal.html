@@ -1,0 +1,17 @@
+    <!-- Modal for Enlarged Product Image View -->
+    <div id="imageModal" onclick="closeImageModal()">
+        <div class="modal-content-shell" onclick="event.stopPropagation()">
+            <div class="modal-img-container">
+                <img id="modalImg" src="" alt="صورة المنتج">
+            </div>
+            <div class="p-4 bg-white flex items-center justify-between border-t border-mist-100">
+                <div class="min-w-0 pr-2">
+                    <div id="modalBrand" class="text-xs font-bold text-sage-600 uppercase tracking-wider truncate"></div>
+                    <div id="modalTitle" class="text-sm font-bold text-mist-900 truncate"></div>
+                </div>
+                <button onclick="closeImageModal()" class="w-8 h-8 rounded-full bg-mist-100 hover:bg-mist-200 text-mist-600 flex items-center justify-center transition shrink-0">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#i-x"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>

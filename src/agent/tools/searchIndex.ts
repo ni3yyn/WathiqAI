@@ -24,6 +24,7 @@ export interface SearchEntry {
     catCanon: string;           // canonical category (lowercase)
     allTags: string[];          // lowercase raw tags
     allTagsNorm: string[];
+    marketingClaimsNorm: string[];
     searchable: string;         // brand+name+cat+label+country+ing+tags (normalized)
     bounds: PriceBounds;
 }
@@ -45,6 +46,9 @@ export function getSearchEntry(p: any): SearchEntry {
     const allTags: string[] = [...(p.marketingClaims || []), ...(p.targetTypes || [])]
         .map((c: any) => (typeof c === 'string' ? c.toLowerCase() : ''));
     const allTagsNorm = allTags.map(t => normalizeArabicText(t));
+    const marketingClaimsNorm = (Array.isArray(p.marketingClaims) ? p.marketingClaims : [])
+        .filter((claim: any) => typeof claim === 'string')
+        .map((claim: string) => normalizeArabicText(claim));
 
     const entry: SearchEntry = {
         pBrand,
@@ -58,6 +62,7 @@ export function getSearchEntry(p: any): SearchEntry {
         catCanon: (normalizeCategory(pCatId) || pCatId).toLowerCase(),
         allTags,
         allTagsNorm,
+        marketingClaimsNorm,
         searchable: `${pBrand} ${pName} ${normalizeArabicText(pCatId)} ${normalizeArabicText(pCatLabel)} ${pCountry} ${pIng} ${allTagsNorm.join(' ')}`,
         bounds: resolvePriceBounds(p.price),
     };

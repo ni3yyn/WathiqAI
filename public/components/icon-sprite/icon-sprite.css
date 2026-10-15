@@ -1,0 +1,2 @@
+/* The SVG sprite is visually hidden; consuming icons inherit currentColor. */
+#wathiqIconSprite { position: absolute; width: 0; height: 0; overflow: hidden; }

@@ -34,6 +34,9 @@ export interface LongtermFacts {
     budgetMax?: number;
     country?: string;
     language?: 'ar' | 'fr' | 'en';
+    register?: 'darija' | 'msa';
+    city?: string;
+    climateZone?: 'coastal_humid' | 'arid_saharan' | 'steppe_highland' | 'tell_temperate';
 }
 
 interface Row { h: string; t: number; facts?: LongtermFacts; deleted?: boolean }
@@ -92,6 +95,9 @@ export function extractDurableFacts(profile: UserProfile): LongtermFacts {
     if (profile.budgetMax && profile.budgetMax > 0 && profile.budgetMax < 1_000_000) f.budgetMax = Math.round(profile.budgetMax);
     if (profile.country) f.country = profile.country.slice(0, 40);
     if (profile.language) f.language = profile.language;
+    if (profile.register) f.register = profile.register;
+    if (profile.city) f.city = profile.city.slice(0, 40);
+    if (profile.climateZone) f.climateZone = profile.climateZone;
     return f;
 }
 
@@ -147,6 +153,8 @@ export function applyFactsToProfile(profile: UserProfile, facts: LongtermFacts):
     if (!profile.budgetMax && facts.budgetMax) profile.budgetMax = facts.budgetMax;
     if (!profile.country && facts.country) profile.country = facts.country;
     if (!profile.language && facts.language) profile.language = facts.language;
+    if (!profile.register && facts.register) profile.register = facts.register;
+    if (!profile.climateZone && facts.climateZone) { profile.climateZone = facts.climateZone; profile.city = profile.city || facts.city; }
 }
 
 export function describeFacts(lang: 'ar' | 'fr' | 'en', f: LongtermFacts): string {

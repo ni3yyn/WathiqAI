@@ -1,0 +1,14 @@
+        .auth-banner { padding: .65rem 1rem; border-radius: .85rem; font-size: .82rem; }
+        .auth-card { width: 100%; margin: 0; padding: 1rem; border-radius: 1rem; }
+        .auth-field { width: 100%; padding: .65rem .8rem; border-radius: .65rem; background: #f3f5f3; color: #253d2c; }
+        .auth-action { padding: .55rem .8rem; border-radius: .65rem; background: #e8f1e9; color: #345b3c; font-weight: 600; }
+        .auth-action:disabled { opacity: .55; cursor: wait; }
+        .modal-icon-btn { width: 2.6rem; height: 2.6rem; display: inline-flex; align-items: center; justify-content: center; border-radius: .8rem; color: #345b3c; background: rgba(255,255,255,.8); box-shadow: 0 2px 10px rgba(45,60,48,.06); }
+        .modal-icon-btn:hover { background: #e8f1e9; }
+        .wathiq-modal { width: min(calc(100% - 1.5rem), 38rem); max-height: min(88dvh, 52rem); padding: 0; margin: auto; border: 0; border-radius: 1.2rem; color: #454b46; background: rgba(255,255,255,.97); box-shadow: 0 24px 80px rgba(20,35,24,.25); overflow: hidden; }
+        .wathiq-modal::backdrop { background: rgba(28,39,30,.4); backdrop-filter: blur(3px); }
+        .wathiq-modal-body { max-height: min(88dvh, 52rem); overflow: auto; padding: 1rem; }
+        #authStatus { position: fixed; z-index: 90; left: 50%; top: calc(4.8rem + env(safe-area-inset-top)); transform: translateX(-50%); width: min(calc(100% - 2rem), 38rem); margin: 0; box-shadow: 0 8px 30px rgba(35,50,38,.14); }
+        #authHeader[hidden], #authWarning[hidden], #authStatus[hidden], #loginPanel[hidden], #accountPanel[hidden] { display: none !important; }
+        .ltr-inline { direction: ltr; unicode-bidi: isolate; }
+        .rtl-inline { direction: rtl; unicode-bidi: isolate; font-family: 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', sans-serif; }

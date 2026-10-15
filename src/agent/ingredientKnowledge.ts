@@ -12,7 +12,7 @@
 import { normalizeArabicText } from './taxonomy';
 
 export type Lang = 'ar' | 'fr' | 'en';
-export type L10n = { ar: string; fr: string; en: string };
+export type L10n = { ar: string; fr: string; en: string; dz?: string };
 export const pick = (t: L10n, lang: Lang | undefined): string => t[lang || 'ar'] || t.ar;
 
 export interface IngredientConcept {
@@ -88,6 +88,9 @@ export const CONCEPTS: IngredientConcept[] = [
     { key: 'sulfur', label: { ar: 'الكبريت', fr: 'soufre', en: 'sulfur' }, active: true,
       aliases: ['sulfur', 'sulphur', 'soufre', 'كبريت', 'الكبريت'],
       test: re(/^sulfur$|^sulphur$|\bsulfur\b|\bsulphur\b/i) },
+    { key: 'copper_peptide', label: { ar: 'ببتيدات النحاس', fr: 'peptides de cuivre', en: 'copper peptides' }, active: true,
+      aliases: ['copper peptide', 'copper peptides', 'copper tripeptide', 'ghk-cu', 'ghk cu', 'ببتيد النحاس', 'ببتيدات النحاس', 'peptide de cuivre'],
+      test: re(/copper tripeptide|ghk|copper peptide|copper (palmitoyl|lysinate)/i) },
     { key: 'peptide', label: { ar: 'الببتيدات', fr: 'peptides', en: 'peptides' }, active: true,
       aliases: ['peptide', 'peptides', 'peptide', 'ببتيد', 'ببتيدات', 'الببتيدات'],
       test: re(/peptide|palmitoyl|matrixyl|argireline/i) },
@@ -261,6 +264,14 @@ export const INTERACTION_RULES: InteractionRule[] = [
         ar: 'تهيّج وجفاف محتمل عند الجمع؛ استعملهما في أوقات مختلفة.',
         fr: 'Sécheresse/irritation possibles : à des moments différents.',
         en: 'Possible dryness and irritation — use at different times.' } },
+    { a: 'vitc', b: 'copper_peptide', severity: 'avoid_together', advice: {
+        ar: 'فيتامين سي (الحمضي) قد يؤكسد ببتيدات النحاس ويُضعف مفعولها؛ استعملهما في وقتين مختلفين (سي صباحاً، النحاس مساءً).',
+        fr: 'La vitamine C acide peut oxyder les peptides de cuivre : séparez-les (C le matin, cuivre le soir).',
+        en: 'Acidic vitamin C can oxidize copper peptides and weaken them — separate them (C in the morning, copper at night).' } },
+    { a: 'niacinamide', b: 'aha', severity: 'caution', advice: {
+        ar: 'متوافقان لدى معظم الناس، لكن للبشرة الحساسة أو المبتدئين الأفضل الفصل: الحمض ليلاً مرتين أسبوعياً، والنياسيناميد صباحاً أو في الليالي الخالية من المقشر.',
+        fr: 'Compatibles pour la plupart des peaux, mais pour une peau sensible ou débutante mieux vaut séparer : acide le soir 2×/semaine, niacinamide le matin ou les soirs sans exfoliant.',
+        en: 'Compatible for most people, but for sensitive or beginner skin it is safer to separate: acid at night twice a week, niacinamide in the morning or on non-exfoliant nights.' } },
     { a: 'niacinamide', b: 'vitc', severity: 'ok', advice: {
         ar: 'لا يوجد تعارض يُذكر — الاعتقاد القديم بأنهما يتعارضان غير دقيق مع التركيبات الحديثة.',
         fr: 'Aucun conflit notable — l\'ancienne croyance ne vaut pas pour les formules modernes.',
@@ -278,6 +289,17 @@ export const PLACEMENT: Record<string, Placement> = {
     vitc: 'AM', uv_filter: 'AM',
 };
 export const placementOf = (key: string): Placement => PLACEMENT[key] || 'either';
+
+/** Strong actives where a "buffering / sandwich" application helps sensitive or beginner skin. */
+export const STRONG_ACTIVES = ['retinoid', 'aha', 'bha', 'benzoyl'];
+/** Actives that deserve a gradual induction schedule (see generateUsageSchedule). */
+export const POTENT_KEYS = ['retinoid', 'aha', 'bha', 'benzoyl', 'azelaic', 'vitc'];
+
+export const BUFFERING_TIP: L10n = {
+    ar: 'للبشرة الحساسة أو عند البدء: طريقة الساندويتش — طبقة مرطب خفيفة ← المادة الفعّالة ← طبقة مرطب ثانية، لتخفيف التهيج دون إلغاء المفعول.',
+    fr: 'Peau sensible ou débutant : méthode sandwich — fine couche d\'hydratant → actif → hydratant, pour réduire l\'irritation.',
+    en: 'For sensitive skin or when starting: the sandwich method — thin moisturizer layer → active → moisturizer — to buffer irritation.',
+};
 
 /** Concepts that make daily sunscreen the following morning important. */
 export const PHOTOSENSITIZING = ['retinoid', 'aha', 'bha'];

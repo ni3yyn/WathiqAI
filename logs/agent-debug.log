@@ -1,6 +1,438 @@
-=== Wathiq Agent debug log — session started at 2026-10-10T08:33:17.756Z ===
+=== Wathiq Agent debug log — session started at 2026-10-15T19:06:41.491Z ===
 === Log file: C:\Users\HP\Desktop\New folder\WathiqAI - Copy\logs\agent-debug.log
-=== Process PID: 37620
+=== Process PID: 27236
 === Node: v24.15.0
 ===
 
+[AGENT][#1][TIMING] INTENT_ROUTER duration=25ms tool=build_routine confidence=high compound=false
+[AGENT][#1][TIMING] SAFETY_GATE duration=5ms matched=false
+[AGENT][#1][TIMING] FAST_LANE_DISPATCH duration=2ms result=fallback-to-llm
+[AGENT][#1][TIMING] MODEL_CONTEXT duration=16ms historyMessages=5 lastUserChars=417
+[AGENT][#1][TOOL] build_routine call {
+  "toolCallId": "call_821124",
+  "args": {
+    "target_concern": "بشرة دهنية",
+    "max_budget": 5000
+  }
+}
+[AGENT][#1][TOOL] build_routine result {
+  "toolCallId": "call_821124",
+  "durationMs": 372,
+  "result": {
+    "keys": [
+      "routineId",
+      "title",
+      "concern",
+      "routineType",
+      "totalCost",
+      "maxBudget",
+      "savings",
+      "stepsCount",
+      "skippedByRequest",
+      "stepsSummary",
+      "includedRequired",
+      "requiredNotPlaced"
+    ]
+  }
+}
+[AGENT][#1][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [
+    "build_routine"
+  ],
+  "textLength": 298,
+  "firstStreamEventMs": 130,
+  "firstTextMs": 3177,
+  "firstCardMs": 1942
+}
+[AGENT][#1][TIMING] LLM PATH total=3608ms firstStreamEvent=130ms firstCard=1942ms firstText=3177ms
+[AGENT][#2][TIMING] INTENT_ROUTER duration=6ms tool=none confidence=low compound=false
+[AGENT][#2][TIMING] SAFETY_GATE duration=1ms matched=false
+[AGENT][#2][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#2][TIMING] MODEL_CONTEXT duration=616ms historyMessages=7 lastUserChars=395
+[AGENT][#2][TOOL] search_products call {
+  "toolCallId": "call_84507",
+  "args": {
+    "country": "Algeria",
+    "category": "skin_serum",
+    "skin_type": "[REDACTED]",
+    "max_price": 2500
+  }
+}
+[AGENT][#2][TOOL] search_products result {
+  "toolCallId": "call_84507",
+  "durationMs": 213,
+  "result": {
+    "keys": [
+      "foundCount",
+      "returnedCount",
+      "fallbackMessage",
+      "appliedFilters",
+      "relaxedFilters",
+      "hasMore",
+      "nextOffset",
+      "productsSummary"
+    ],
+    "foundCount": 10,
+    "returnedCount": 10
+  }
+}
+[AGENT][#2][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [
+    "search_products"
+  ],
+  "textLength": 253,
+  "firstStreamEventMs": 640,
+  "firstTextMs": 2889,
+  "firstCardMs": 1840
+}
+[AGENT][#2][TIMING] LLM PATH total=3304ms firstStreamEvent=640ms firstCard=1840ms firstText=2889ms
+[AGENT][#3][TIMING] INTENT_ROUTER duration=2ms tool=check_ingredient_list confidence=medium compound=false
+[AGENT][#3][TIMING] SAFETY_GATE duration=0ms matched=false
+[AGENT][#3][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#3][TIMING] MODEL_CONTEXT duration=3ms historyMessages=7 lastUserChars=562
+[AGENT][#3][TOOL] check_ingredient_list call {
+  "toolCallId": "call_924029",
+  "args": {
+    "ingredients_text": "[REDACTED]"
+  }
+}
+[AGENT][#3][TOOL] check_ingredient_list result {
+  "toolCallId": "call_924029",
+  "durationMs": 1339,
+  "result": {
+    "keys": [
+      "label",
+      "ingredientCount",
+      "truncated",
+      "score",
+      "verdict",
+      "safetyScore",
+      "safetyFlags",
+      "allergenHits",
+      "personalizedNote",
+      "detectedActives",
+      "unknownIngredients"
+    ]
+  }
+}
+[AGENT][#3][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [
+    "check_ingredient_list"
+  ],
+  "textLength": 295,
+  "firstStreamEventMs": 20,
+  "firstTextMs": 3954,
+  "firstCardMs": 3057
+}
+[AGENT][#3][TIMING] LLM PATH total=4334ms firstStreamEvent=20ms firstCard=3057ms firstText=3954ms
+[AGENT][#4][TIMING] INTENT_ROUTER duration=12ms tool=evaluate_brand confidence=medium compound=true
+[AGENT][#4][TIMING] SAFETY_GATE duration=1ms matched=false
+[AGENT][#4][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#4][TIMING] MODEL_CONTEXT duration=9ms historyMessages=7 lastUserChars=880
+[AGENT][#4][TOOL] evaluate_brand call {
+  "toolCallId": "call_823678",
+  "args": {
+    "brandName": "Belnco",
+    "focusCategory": "sunscreen"
+  }
+}
+[AGENT][#4][TOOL] search_products call {
+  "toolCallId": "call_823681",
+  "args": {
+    "brand": "Belnco",
+    "category": "sunscreen"
+  }
+}
+[AGENT][#4][TOOL] search_products result {
+  "toolCallId": "call_823681",
+  "durationMs": 241,
+  "result": {
+    "keys": [
+      "foundCount",
+      "returnedCount",
+      "fallbackMessage",
+      "appliedFilters",
+      "relaxedFilters",
+      "hasMore",
+      "nextOffset",
+      "productsSummary"
+    ],
+    "foundCount": 2,
+    "returnedCount": 2
+  }
+}
+[AGENT][#4][TOOL] evaluate_brand result {
+  "toolCallId": "call_823678",
+  "durationMs": 1460,
+  "result": {
+    "keys": [
+      "brand",
+      "sampleSize",
+      "confidenceTier",
+      "verdict",
+      "safety",
+      "claimsHonesty",
+      "transparency",
+      "standoutProducts",
+      "generalNotes",
+      "categoryFocus"
+    ]
+  }
+}
+[AGENT][#4][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [
+    "evaluate_brand",
+    "search_products"
+  ],
+  "textLength": 356,
+  "firstStreamEventMs": 41,
+  "firstTextMs": 3293,
+  "firstCardMs": 1225
+}
+[AGENT][#4][TIMING] LLM PATH total=3910ms firstStreamEvent=41ms firstCard=1225ms firstText=3293ms
+[AGENT][#5][TIMING] INTENT_ROUTER duration=2ms tool=evaluate_product confidence=high compound=false
+[AGENT][#5][TIMING] SAFETY_GATE duration=0ms matched=false
+[AGENT][#5][TIMING] FAST_LANE_DISPATCH duration=613ms result=fallback-to-llm
+[AGENT][#5][TIMING] MODEL_CONTEXT duration=2ms historyMessages=7 lastUserChars=328
+[AGENT][#5][TOOL] evaluate_product call {
+  "toolCallId": "call_877828",
+  "args": {
+    "productId": "DZ-SSE-BEL-001"
+  }
+}
+[AGENT][#5][TOOL] evaluate_product result {
+  "toolCallId": "call_877828",
+  "durationMs": 420,
+  "result": {
+    "keys": [
+      "productId",
+      "name",
+      "brand",
+      "oilGuardScore",
+      "finalVerdict",
+      "safetyScore",
+      "efficacyScore",
+      "claimsSummary",
+      "detectedIngredients"
+    ]
+  }
+}
+[AGENT][#5][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [
+    "evaluate_product"
+  ],
+  "textLength": 257,
+  "firstStreamEventMs": 628,
+  "firstTextMs": 4012,
+  "firstCardMs": 2694
+}
+[AGENT][#5][TIMING] LLM PATH total=4323ms firstStreamEvent=628ms firstCard=2694ms firstText=4012ms
+[AGENT][#6][TIMING] INTENT_ROUTER duration=1ms tool=none confidence=low compound=false
+[AGENT][#6][TIMING] SAFETY_GATE duration=1ms matched=false
+[AGENT][#6][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#6][TIMING] MODEL_CONTEXT duration=461ms historyMessages=7 lastUserChars=127
+[AGENT][#6][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [],
+  "textLength": 147,
+  "firstStreamEventMs": 474,
+  "firstTextMs": 3231,
+  "firstCardMs": -1
+}
+[AGENT][#6][TIMING] LLM PATH total=3506ms firstStreamEvent=474ms firstCard=-1ms firstText=3231ms
+[AGENT][#7][TIMING] INTENT_ROUTER duration=0ms tool=none confidence=low compound=false
+[AGENT][#7][TIMING] SAFETY_GATE duration=0ms matched=false
+[AGENT][#7][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#7][TIMING] MODEL_CONTEXT duration=390ms historyMessages=7 lastUserChars=348
+[AGENT][#7][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [],
+  "textLength": 52,
+  "firstStreamEventMs": 399,
+  "firstTextMs": 1464,
+  "firstCardMs": -1
+}
+[AGENT][#7][TIMING] LLM PATH total=1670ms firstStreamEvent=399ms firstCard=-1ms firstText=1464ms
+[AGENT][#8][TIMING] INTENT_ROUTER duration=0ms tool=none confidence=low compound=false
+[AGENT][#8][TIMING] SAFETY_GATE duration=0ms matched=false
+[AGENT][#8][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#8][TIMING] MODEL_CONTEXT duration=447ms historyMessages=7 lastUserChars=354
+[AGENT][#8][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [],
+  "textLength": 111,
+  "firstStreamEventMs": 459,
+  "firstTextMs": 2011,
+  "firstCardMs": -1
+}
+[AGENT][#8][TIMING] LLM PATH total=2295ms firstStreamEvent=459ms firstCard=-1ms firstText=2011ms
+[AGENT][#9][TIMING] INTENT_ROUTER duration=1ms tool=none confidence=low compound=false
+[AGENT][#9][TIMING] SAFETY_GATE duration=1ms matched=false
+[AGENT][#9][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#9][TIMING] MODEL_CONTEXT duration=446ms historyMessages=7 lastUserChars=363
+[AGENT][#9][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [],
+  "textLength": 180,
+  "firstStreamEventMs": 458,
+  "firstTextMs": 1811,
+  "firstCardMs": -1
+}
+[AGENT][#9][TIMING] LLM PATH total=2026ms firstStreamEvent=458ms firstCard=-1ms firstText=1811ms
+[AGENT][#10][TIMING] INTENT_ROUTER duration=1ms tool=none confidence=low compound=false
+[AGENT][#10][TIMING] SAFETY_GATE duration=0ms matched=false
+[AGENT][#10][TIMING] FAST_LANE_DISPATCH duration=1ms result=fallback-to-llm
+[AGENT][#10][TIMING] MODEL_CONTEXT duration=470ms historyMessages=7 lastUserChars=210
+[AGENT][#10][TOOL] search_products call {
+  "toolCallId": "call_854093",
+  "args": {
+    "category": "skin_serum",
+    "skin_type": "[REDACTED]",
+    "marketing_claims": [
+      "مضاد لحب الشباب",
+      "توازن الدهون والزيوت"
+    ]
+  }
+}
+[AGENT][#10][TOOL] search_products result {
+  "toolCallId": "call_854093",
+  "durationMs": 541,
+  "result": {
+    "keys": [
+      "foundCount",
+      "returnedCount",
+      "fallbackMessage",
+      "appliedFilters",
+      "relaxedFilters",
+      "hasMore",
+      "nextOffset",
+      "productsSummary"
+    ],
+    "foundCount": 45,
+    "returnedCount": 10
+  }
+}
+[AGENT][#10][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [
+    "search_products"
+  ],
+  "textLength": 257,
+  "firstStreamEventMs": 482,
+  "firstTextMs": 5911,
+  "firstCardMs": 3955
+}
+[AGENT][#10][TIMING] LLM PATH total=6311ms firstStreamEvent=482ms firstCard=3955ms firstText=5911ms
+[AGENT][#11][TIMING] INTENT_ROUTER duration=1ms tool=none confidence=low compound=false
+[AGENT][#11][TIMING] SAFETY_GATE duration=0ms matched=false
+[AGENT][#11][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#11][TIMING] MODEL_CONTEXT duration=397ms historyMessages=7 lastUserChars=147
+[AGENT][#11][TOOL] evaluate_product call {
+  "toolCallId": "call_777837",
+  "args": {
+    "productId": "KR-SSE-COS-008",
+    "selectedClaims": [
+      "مضاد لحب الشباب",
+      "توازن الدهون والزيوت"
+    ]
+  }
+}
+[AGENT][#11][TOOL] evaluate_product result {
+  "toolCallId": "call_777837",
+  "durationMs": 499,
+  "result": {
+    "keys": [
+      "productId",
+      "name",
+      "brand",
+      "oilGuardScore",
+      "finalVerdict",
+      "safetyScore",
+      "efficacyScore",
+      "claimsSummary",
+      "detectedIngredients"
+    ]
+  }
+}
+[AGENT][#11][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [
+    "evaluate_product"
+  ],
+  "textLength": 307,
+  "firstStreamEventMs": 408,
+  "firstTextMs": 4788,
+  "firstCardMs": 2134
+}
+[AGENT][#11][TIMING] LLM PATH total=5192ms firstStreamEvent=408ms firstCard=2134ms firstText=4788ms
+[AGENT][#12][TIMING] INTENT_ROUTER duration=1ms tool=none confidence=low compound=false
+[AGENT][#12][TIMING] SAFETY_GATE duration=1ms matched=false
+[AGENT][#12][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#12][TIMING] MODEL_CONTEXT duration=428ms historyMessages=7 lastUserChars=352
+[AGENT][#12][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "stop",
+  "toolCalls": [],
+  "textLength": 238,
+  "firstStreamEventMs": 442,
+  "firstTextMs": 3485,
+  "firstCardMs": -1
+}
+[AGENT][#12][TIMING] LLM PATH total=3709ms firstStreamEvent=442ms firstCard=-1ms firstText=3485ms
+[AGENT][#13][TIMING] INTENT_ROUTER duration=1ms tool=none confidence=low compound=false
+[AGENT][#13][TIMING] SAFETY_GATE duration=1ms matched=false
+[AGENT][#13][TIMING] FAST_LANE_DISPATCH duration=0ms result=fallback-to-llm
+[AGENT][#13][TIMING] MODEL_CONTEXT duration=674ms historyMessages=7 lastUserChars=395
+[AGENT][#13][TOOL] search_products call {
+  "toolCallId": "call_680809",
+  "args": {
+    "category": "skin_serum",
+    "active_ingredient": "[REDACTED]"
+  }
+}
+[AGENT][#13][TOOL] search_products result {
+  "toolCallId": "call_680809",
+  "durationMs": 30,
+  "result": {
+    "keys": [
+      "foundCount",
+      "returnedCount",
+      "fallbackMessage",
+      "appliedFilters",
+      "relaxedFilters",
+      "hasMore",
+      "nextOffset",
+      "productsSummary"
+    ],
+    "foundCount": 36,
+    "returnedCount": 10
+  }
+}
+[AGENT][#13][LLM_STREAM] attempt completed {
+  "attempt": "1/7",
+  "finishReason": "length",
+  "toolCalls": [
+    "search_products"
+  ],
+  "textLength": 507,
+  "firstStreamEventMs": 686,
+  "firstTextMs": 4198,
+  "firstCardMs": 2670
+}
+[AGENT][#13][TIMING] LLM PATH total=4795ms firstStreamEvent=686ms firstCard=2670ms firstText=4198ms

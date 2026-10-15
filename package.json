@@ -18,16 +18,15 @@
     "@xenova/transformers": "^2.17.2",
     "ai": "^7.0.118",
     "apify-client": "^2.25.0",
-    "better-sqlite3": "^13.0.3",
     "crawlee": "^3.18.2",
     "dotenv": "^17.4.2",
     "fastify": "^5.11.3",
     "groq-sdk": "^1.5.0",
+    "jose": "^6.2.12",
     "node-cron": "^4.6.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",
     "@types/node-cron": "^3.0.11",
     "playwright": "^1.63.0",

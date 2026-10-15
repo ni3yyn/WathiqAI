@@ -415,7 +415,7 @@ export const TARGET_TYPE_MAPPINGS: TargetMapping[] = [
     {
         canonical: 'dry_hair',
         catalogTags: ['شعر جاف', 'dry_hair', 'مخصص للشعر الجاف'],
-        aliases: ['dry hair', 'cheveux secs', 'شعر جاف', 'شعر ناشف']
+        aliases: ['dry hair', 'cheveux secs', 'شعر جاف', 'شعر ناشف', 'فروة جافة', 'فروة ناشفة']
     },
     {
         canonical: 'normal_hair',
@@ -538,7 +538,7 @@ export const CLAIM_MAPPINGS: ClaimMapping[] = [
     // Anti-Acne & Blemish & Pores
     {
         canonical: 'anti_acne',
-        catalogClaims: ['مضاد لحب الشباب', 'مضاد للرؤوس السوداء', 'تنقية المسام', 'قابض للمسام', 'توازن الزيوت', 'للبشرة الدهنية'],
+        catalogClaims: ['مضاد لحب الشباب', 'مضاد للرؤوس السوداء', 'تنقية المسام', 'قابض للمسام', 'توازن الزيوت'],
         aliases: [
             'anti-acne', 'acne', 'blackheads', 'pores', 'blemishes', 'breakouts', 'sebum', 'oil control',
             'anti-acné', 'points noirs', 'pores dilatés', 'imperfections', 'sébum',
@@ -726,31 +726,31 @@ export function expandToCatalogClaims(inputClaims: string[]): string[] {
         const cLow = normalizeArabicText(claim);
         if (!cLow) continue;
 
-        // 1. Add the raw claim just in case
-        matched.add(cLow);
-
-        // 2. Direct match against catalog
-        const direct = WATHIQ_CATALOG_CLAIMS.find(c => {
-            const cn = normalizeArabicText(c);
-            return cn.includes(cLow) || cLow.includes(cn);
-        });
+        // Exact catalog claims stay exact; do not expand a specific claim
+        // (e.g. "تفتيح البشرة") into every claim in its broad family.
+        const direct = WATHIQ_CATALOG_CLAIMS.find(c => normalizeArabicText(c) === cLow);
         if (direct) {
-            matched.add(direct.toLowerCase());
+            matched.add(normalizeArabicText(direct));
+            continue;
         }
 
-        // 3. Translate via aliases (English/French/Darija -> Arabic)
+        // Expand known aliases to canonical claims. Avoid reverse substring
+        // matching short generic words (e.g. "مرطب") against long aliases.
+        let foundMapping = false;
         for (const mapping of CLAIM_MAPPINGS) {
-            const isMatch = mapping.aliases.some(a => {
-                const an = normalizeArabicText(a);
-                return an.length > 1 && (cLow.includes(an) || an.includes(cLow));
-            }) || mapping.catalogClaims.some(c => {
-                const cn = normalizeArabicText(c);
-                return cLow.includes(cn) || cn.includes(cLow);
+            const isMatch = mapping.aliases.some(alias => {
+                const normalizedAlias = normalizeArabicText(alias);
+                return normalizedAlias === cLow || (normalizedAlias.length >= 5 && cLow.includes(normalizedAlias));
+            }) || mapping.catalogClaims.some(catalogClaim => {
+                const normalizedClaim = normalizeArabicText(catalogClaim);
+                return normalizedClaim === cLow || (normalizedClaim.length >= 5 && cLow.includes(normalizedClaim));
             });
             if (isMatch) {
-                mapping.catalogClaims.forEach(cc => matched.add(cc.toLowerCase()));
+                foundMapping = true;
+                mapping.catalogClaims.forEach(cc => matched.add(normalizeArabicText(cc)));
             }
         }
+        if (!foundMapping) matched.add(cLow);
     }
     return Array.from(matched);
 }

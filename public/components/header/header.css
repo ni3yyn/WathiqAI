@@ -1,0 +1,4 @@
+/* Header-only styles. Most header layout uses the existing Tailwind utilities. */
+.wathiq-header { min-width: 0; }
+.wathiq-header > * { min-width: 0; }
+

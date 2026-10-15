@@ -1,0 +1,93 @@
+        /* FLOATING PILL INPUT BAR */
+        .floating-input-wrap {
+            position: relative;
+            width: 100%;
+            max-width: 52rem;
+            margin: 0 auto;
+            padding: 0 0.5rem 0.65rem;
+            z-index: 30;
+        }
+        .floating-pill {
+            background: rgba(255, 255, 255, 0.88);
+            backdrop-filter: blur(28px) saturate(190%);
+            -webkit-backdrop-filter: blur(28px) saturate(190%);
+            border: 1px solid rgba(255, 255, 255, 0.95);
+            border-radius: 1.6rem;
+            box-shadow: 0 8px 32px rgba(45, 60, 48, 0.09), 0 2px 6px rgba(45, 60, 48, 0.04);
+            padding: 0.35rem 0.55rem 0.35rem 0.65rem;
+            display: flex;
+            align-items: flex-end;
+            gap: 0.45rem;
+            transition: all 0.28s cubic-bezier(0.16, 0.84, 0.24, 1);
+        }
+        .floating-pill:focus-within {
+            background: rgba(255, 255, 255, 0.98);
+            box-shadow: 0 12px 40px rgba(45, 60, 48, 0.14), 0 3px 10px rgba(45, 60, 48, 0.06);
+            transform: translateY(-2px);
+        }
+
+        .auto-textarea {
+            resize: none;
+            overflow-y: auto;
+            max-height: 140px;
+            min-height: 42px;
+            line-height: 1.55;
+            padding: 0.65rem 0.75rem;
+            font-size: 0.92rem;
+            background: transparent;
+            color: #253d2c;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(124, 174, 135, 0.3) transparent;
+        }
+        .auto-textarea::-webkit-scrollbar { width: 4px; }
+        .auto-textarea::-webkit-scrollbar-thumb { background: rgba(124, 174, 135, 0.3); border-radius: 999px; }
+        .auto-textarea::placeholder { color: #a8b0a9; }
+
+        .pill-icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #7c857d;
+            background: rgba(243, 245, 243, 0.85);
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+            margin-bottom: 2px;
+            cursor: pointer;
+        }
+        .pill-icon-btn:hover {
+            color: #253d2c;
+            background: rgba(232, 241, 233, 0.95);
+            transform: scale(1.05);
+        }
+        .pill-icon-btn.recording {
+            color: #ffffff;
+            background: #e11d48;
+            box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.25);
+            animation: micPulse 1.2s infinite ease-in-out;
+        }
+
+        .send-pill-btn {
+            background: linear-gradient(135deg, #558f62 0%, #3f7249 100%);
+            box-shadow: 0 3px 10px rgba(85, 143, 98, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+            color: #ffffff;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+            flex-shrink: 0;
+            align-self: flex-end;
+            margin-bottom: 2px;
+            cursor: pointer;
+        }
+        .send-pill-btn:hover:not(:disabled) {
+            background: linear-gradient(135deg, #7cae87 0%, #558f62 100%);
+            box-shadow: 0 5px 16px rgba(85, 143, 98, 0.38);
+            transform: scale(1.06);
+        }
+        .send-pill-btn:disabled { opacity: 0.55; cursor: not-allowed; }

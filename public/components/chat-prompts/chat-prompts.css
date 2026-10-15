@@ -1,0 +1,26 @@
+        .prompt-chip {
+            position: relative;
+            overflow: hidden;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            flex-shrink: 0;
+        }
+        .prompt-chip::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(124, 174, 135, 0.1), rgba(85, 143, 98, 0.05));
+            opacity: 0;
+            transition: opacity 0.25s ease;
+        }
+        .prompt-chip:hover::before { opacity: 1; }
+
+        .prompt-scenarios {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .brand-icon {
+            background: linear-gradient(135deg, #7cae87 0%, #558f62 50%, #3f7249 100%);
+            box-shadow: 0 4px 12px rgba(85, 143, 98, 0.25), 0 1px 2px rgba(85, 143, 98, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+        }

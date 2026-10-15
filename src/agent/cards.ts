@@ -16,6 +16,7 @@ export function emitCardForTool(toolName: string, t: AgentStateTracker, emit?: C
             if (t.lastProductResults) { emit('product_results', { products: t.lastProductResults }); return true; }
             return false;
         case 'find_alternatives':
+        case 'find_actives_dupe':
             if (t.lastProductResults) {
                 emit('product_results', { products: t.lastProductResults, reference: x.lastAlternativesReference || undefined });
                 return true;
@@ -58,6 +59,31 @@ export function emitCardForTool(toolName: string, t: AgentStateTracker, emit?: C
         case 'product_contains':
             if (t.lastIngredientPresence) { emit('ingredient_presence', { presence: t.lastIngredientPresence }); return true; }
             return false;
+        case 'routine_versions':
+            if (t.lastRoutineDiff) { emit('routine_diff', { diff: t.lastRoutineDiff }); return true; }
+            if (t.lastRoutine) { emit('routine', { routine: t.lastRoutine }); return true; }
+            return false;
+        case 'explain_pick':
+            if (t.lastExplanation) { emit('pick_explanation', { explanation: t.lastExplanation }); return true; }
+            return false;
+        case 'share_routine':
+            if (t.lastShare) { emit('share', { share: t.lastShare }); return true; }
+            return false;
+        case 'build_shopping_list':
+            if (t.lastShoppingList) { emit('shopping_list', { shoppingList: t.lastShoppingList }); return true; }
+            return false;
+        case 'build_gift_set':
+            if (t.lastGift) { emit('gift_set', { gift: t.lastGift }); return true; }
+            return false;
+        case 'triage_reaction':
+            if (t.lastTriage) { emit('reaction_triage', { triage: t.lastTriage }); return true; }
+            return false;
+        case 'manage_cabinet':
+            if (t.lastCabinet) { emit('cabinet', { cabinet: t.lastCabinet }); return true; }
+            return false;
+        case 'generate_usage_schedule':
+            if (t.lastUsageSchedule) { emit('usage_schedule', { schedule: t.lastUsageSchedule }); return true; }
+            return false;
         case 'check_compatibility':
             if (t.lastCompatibility) { emit('compatibility', { compatibility: t.lastCompatibility }); return true; }
             return false;
@@ -78,6 +104,15 @@ export function resetTurnState(t: AgentStateTracker) {
     t.lastComparison = null;
     t.lastIngredientCheck = null;
     t.lastCompatibility = null;
+    t.lastUsageSchedule = null;
+    t.lastCabinet = null;
+    t.lastTriage = null;
+    t.lastShare = null;
+    t.lastExplanation = null;
+    t.lastShoppingList = null;
+    t.lastGift = null;
+    t.lastRoutineDiff = null;
+    t.lastLabelScan = null;
     t.lastIngredientPresence = null;
     x.lastBrandReviews = null;
     x.lastAlternativesReference = null;

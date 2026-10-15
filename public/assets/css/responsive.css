@@ -1,0 +1,61 @@
+        /* Mobile */
+        @media (max-width: 640px) {
+            header { padding: 0.6rem 0.85rem !important; }
+            header .brand-icon {
+                width: 32px !important;
+                height: 32px !important;
+                border-radius: 0.65rem !important;
+            }
+            header .brand-icon svg { width: 15px; height: 15px; }
+            header h1 { font-size: 0.95rem !important; }
+
+            main { padding: 0.7rem 0.65rem 0 !important; }
+
+            .prompt-scenarios {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                padding-bottom: 0.35rem;
+                margin: 0 -0.65rem;
+                padding-right: 0.65rem;
+                padding-left: 0.65rem;
+                scroll-snap-type: x mandatory;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+            }
+            .prompt-scenarios::-webkit-scrollbar { display: none; }
+            .prompt-scenarios .prompt-chip { scroll-snap-align: start; }
+
+            .agent-avatar { width: 26px !important; height: 26px !important; border-radius: 0.55rem !important; }
+            .agent-avatar svg { width: 13px; height: 13px; }
+            .user-avatar { width: 26px !important; height: 26px !important; border-radius: 0.55rem !important; }
+            .user-avatar svg { width: 13px; height: 13px; }
+
+            .chat-prose { font-size: 14.5px; }
+            .score-tile-value { font-size: 16px; }
+
+            .floating-input-wrap {
+                padding-left: 0.35rem;
+                padding-right: 0.35rem;
+                padding-bottom: max(0.55rem, env(safe-area-inset-bottom));
+            }
+            .auto-textarea { font-size: 0.95rem; max-height: 120px; }
+
+            .product-mini-img-wrap { width: 54px; height: 54px; }
+            .routine-step-product-img-wrap { width: 50px; height: 50px; }
+            .analysis-product-hero-img { width: 62px; height: 62px; }
+            .products-rail > .product-mini { width: 250px; }
+            .claims-rail > .claim-row { width: 264px; }
+            .routine-summary-card { width: 155px; }
+            .routine-summary-img-wrap { height: 80px; }
+
+            #scrollBottomFab { bottom: 74px; }
+        }
+
+        @media (max-width: 380px) {
+            .analysis-card, .routine-card, .brand-review-card { padding: 0.85rem; }
+            .claim-row { padding: 0.65rem 0.7rem; }
+            .analysis-score-number { font-size: 22px; }
+            .products-rail > .product-mini { width: 225px; }
+            .claims-rail > .claim-row { width: 240px; }
+            .routine-summary-card { width: 140px; }
+        }

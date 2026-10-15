@@ -9,8 +9,9 @@
 import { getProducts } from '../../wathiq/backendClient';
 import { getProduct, formatCandidateForUI } from './getProduct';
 import { getSearchEntry } from './searchIndex';
-import { getRepresentativePrice } from '../priceUtils';
+import { getRepresentativePrice, getConservativeSavingPrice, isPriceKnown } from '../priceUtils';
 import { normalizeCountry, normalizeCategory } from '../taxonomy';
+import { similarToDisliked } from '../cabinet';
 import { detectActives, getConcept, resolveConcept, matchConceptInList, matchLiteralInList } from '../ingredientKnowledge';
 
 export interface FindAlternativesArgs {
@@ -23,6 +24,8 @@ export interface FindAlternativesArgs {
     /** Allergies / avoided ingredients — hard filter. */
     avoid?: string[];
     exclude_product_ids?: string[];
+    /** INCI lists of products that did NOT suit the user (cabinet) — near-copies are skipped. */
+    disliked_lists?: string[][];
     limit?: number;
 }
 
@@ -63,6 +66,7 @@ export async function findAlternatives(args: FindAlternativesArgs) {
 
     const catalog = await getProducts();
 
+    let skippedSimilar = 0;
     const scored: Array<{ raw: any; score: number; shared: string[]; price: number; sharedClaims: number }> = [];
     for (const raw of catalog) {
         if (!raw?.id || excluded.has(String(raw.id).toLowerCase())) continue;
@@ -74,6 +78,8 @@ export async function findAlternatives(args: FindAlternativesArgs) {
             if (list.length === 0) continue;              // can't verify → can't recommend
             if (violatesAvoid(list, avoid)) continue;
         }
+
+        if (args.disliked_lists?.length && list.length && similarToDisliked(list, args.disliked_lists)) { skippedSimilar++; continue; }
 
         const price = getRepresentativePrice(raw);
         if (args.cheaper_only && refPrice > 0 && !(price > 0 && price < refPrice)) continue;
@@ -110,7 +116,10 @@ export async function findAlternatives(args: FindAlternativesArgs) {
     const products = top.map(t => {
         const ui: any = formatCandidateForUI(t.raw);
         const labels = t.shared.map(k => getConcept(k)?.label.ar || k);
-        const diffPct = refPrice > 0 && t.price > 0 ? Math.round(((refPrice - t.price) / refPrice) * 100) : null;
+        // Conservative: a ranged price (350–400) counts at its MAX when claiming a saving.
+        const worst = getConservativeSavingPrice(t.raw);
+        const diffPct = refPrice > 0 && worst > 0 ? Math.round(((refPrice - worst) / refPrice) * 100) : null;
+        ui.priceKnown = isPriceKnown(t.raw);
         ui.sharedActives = labels;
         ui.sharedActiveKeys = t.shared;
         ui.priceDiffPct = diffPct;                         // +N = cheaper by N%, −N = pricier
@@ -130,6 +139,7 @@ export async function findAlternatives(args: FindAlternativesArgs) {
             actives: [...refActives.keys()].map(k => getConcept(k)?.label.ar || k),
         },
         products,
+        skippedSimilarToDisliked: skippedSimilar || undefined,
         weakMatch: products.every((p: any) => p.matchStrength === 'claims_only'),
         note: refActives.size === 0
             ? 'المنتج المرجعي لا يحتوي مكونات فعالة معروفة للنظام؛ تم الترتيب حسب الادعاءات التسويقية المشتركة والسعر.'

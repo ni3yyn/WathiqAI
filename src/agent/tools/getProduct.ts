@@ -87,6 +87,7 @@ export function formatCandidateForUI(p: any) {
         categoryLabel: catLabel,
         quantity: qty,
         price: formatPriceDisplay(bounds),
+        priceKnown: bounds.min !== undefined || bounds.max !== undefined,
         currency: bounds.currency || 'دج',
         image: p.image || '',
         claims: (p.marketingClaims || []).slice(0, 3),

@@ -1,0 +1,90 @@
+        /* SCROLL TO BOTTOM FLOATING ACTION BUTTON (FAB) */
+        #scrollBottomFab {
+            position: absolute;
+            bottom: 78px;
+            left: 50%;
+            transform: translateX(-50%) translateY(16px);
+            z-index: 25;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.28s cubic-bezier(0.16, 0.84, 0.24, 1);
+        }
+        #scrollBottomFab.visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(0);
+        }
+        .fab-pill {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.5rem 0.95rem;
+            background: rgba(255, 255, 255, 0.94);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-radius: 999px;
+            box-shadow: 0 4px 18px rgba(37, 61, 44, 0.14), 0 1px 3px rgba(37, 61, 44, 0.08);
+            color: #253d2c;
+            font-size: 0.8rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .fab-pill:hover {
+            background: #ffffff;
+            box-shadow: 0 6px 22px rgba(37, 61, 44, 0.2);
+            transform: translateY(-1px);
+        }
+        .fab-unread-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #558f62;
+            box-shadow: 0 0 0 2px rgba(124, 174, 135, 0.3);
+            animation: pulseSoft 1.8s infinite;
+        }
+
+        .divider-label {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #7c857d;
+        }
+        .divider-label::before, .divider-label::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(124, 174, 135, 0.3), transparent);
+        }
+
+        .agent-avatar {
+            background: linear-gradient(135deg, #7cae87 0%, #3f7249 100%);
+            box-shadow: 0 3px 10px rgba(85, 143, 98, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+            flex-shrink: 0;
+        }
+        .user-avatar {
+            background: linear-gradient(135deg, #e8ebe8 0%, #d5dad6 100%);
+            box-shadow: 0 2px 6px rgba(45, 60, 48, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+            flex-shrink: 0;
+        }
+
+        .agent-flow {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+            word-break: break-word;
+        }
+        .agent-flow .chat-prose,
+        .agent-flow .analysis-card,
+        .agent-flow .product-mini,
+        .agent-flow .table-wrap,
+        .agent-flow .brand-review-card {
+            max-width: 100%;
+            min-width: 0;
+        }

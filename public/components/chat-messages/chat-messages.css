@@ -1,0 +1,7 @@
+        .user-bubble.rtl-text {
+            text-align: right;
+            direction: rtl;
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+        }
+
+.wathiq-chat-messages { padding-bottom: 2.5rem; padding-left: 0.15rem; min-height: 0; overflow-x: hidden; }

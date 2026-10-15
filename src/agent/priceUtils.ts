@@ -62,6 +62,22 @@ export function getRepresentativePrice(product: any): number {
     return bounds.min ?? bounds.max ?? 0;
 }
 
+/** True when the catalog actually holds a usable price for this product. */
+export function isPriceKnown(product: any): boolean {
+    const b = resolvePriceBounds(product?.price);
+    return b.min !== undefined || b.max !== undefined;
+}
+
+/**
+ * Price to use for CLAIMS of savings ("X% cheaper"). The catalog stores ranges
+ * ({min:350,max:400}); budget math uses the min (conservative for budgets), but a
+ * saving claim must be conservative the other way — compare against the max.
+ */
+export function getConservativeSavingPrice(product: any): number {
+    const b = resolvePriceBounds(product?.price);
+    return b.max ?? b.min ?? 0;
+}
+
 /**
  * Human-readable price string for UI display: "1200" for a fixed price,
  * "1200 – 1500" for a ranged price, "" when the price is unknown.

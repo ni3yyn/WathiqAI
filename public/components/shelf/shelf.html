@@ -1,0 +1,14 @@
+        <dialog id="shelfModal" class="wathiq-modal" aria-labelledby="shelfModalTitle">
+            <div class="wathiq-modal-body">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                    <h2 id="shelfModalTitle" class="font-bold text-sage-900"><span data-auth-label="myShelf"></span> <span id="shelfCount"></span></h2>
+                    <button id="closeShelfModalBtn" type="button" class="modal-icon-btn" aria-label="Close dialog" title="Close">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#i-x"/></svg>
+                    </button>
+                </div>
+                <section id="shelfPanel" class="auth-card surface-card">
+                    <p class="text-xs text-mist-500" data-auth-label="shelfExplanation"></p>
+                    <div id="shelfItems" aria-live="polite"></div>
+                </section>
+            </div>
+        </dialog>

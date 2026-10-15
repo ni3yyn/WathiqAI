@@ -1,0 +1,179 @@
+        /* BASE ANALYSIS & ROUTINE CARDS */
+        .analysis-card,
+        .routine-card,
+        .brand-review-card {
+            background: rgba(255, 255, 255, 0.82);
+            border-radius: 1.15rem;
+            padding: 1.1rem;
+            box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.95) inset, 0 1px 2px rgba(45, 60, 48, 0.04), 0 6px 20px rgba(45, 60, 48, 0.06);
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            overflow: hidden;
+        }
+        @media (min-width: 640px) {
+            .analysis-card, .routine-card, .brand-review-card { padding: 1.35rem 1.45rem; }
+        }
+
+        .analysis-head {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .analysis-product-hero-img {
+            position: relative;
+            width: 72px;
+            height: 72px;
+            border-radius: 0.95rem;
+            background: linear-gradient(135deg, #f4f8f4, #e2ece3);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            box-shadow: 0 2px 6px rgba(45, 60, 48, 0.08);
+            cursor: pointer;
+        }
+        .analysis-product-hero-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            padding: 4px;
+            transition: transform 0.25s ease;
+        }
+        .analysis-product-hero-img:hover img {
+            transform: scale(1.08);
+        }
+
+        .analysis-section-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #5b635c;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.55rem;
+            flex-wrap: wrap;
+        }
+        .analysis-section-label .icon {
+            width: 14px;
+            height: 14px;
+            color: #3f7249;
+            stroke-width: 2;
+            flex-shrink: 0;
+        }
+        .analysis-section-count {
+            margin-right: auto;
+            margin-left: 0;
+            font-size: 10.5px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            text-transform: none;
+            color: #a8b0a9;
+        }
+        .analysis-block { margin-bottom: 0.95rem; }
+        .analysis-block:last-child { margin-bottom: 0; }
+        .score-row {
+            display: flex;
+            gap: 0.55rem;
+            margin-bottom: 0.95rem;
+        }
+        .score-tile {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.6rem 0.7rem;
+            background: rgba(246, 249, 246, 0.9);
+            border-radius: 0.75rem;
+            min-width: 0;
+        }
+        .score-tile-icon {
+            width: 32px; height: 32px;
+            border-radius: 0.55rem;
+            background: linear-gradient(135deg, rgba(124, 174, 135, 0.2), rgba(85, 143, 98, 0.15));
+            color: #3f7249;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .score-tile-label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #7c857d;
+            margin-bottom: 1px;
+        }
+        .score-tile-value {
+            font-size: 17px;
+            font-weight: 800;
+            color: #253d2c;
+            line-height: 1.1;
+        }
+        .score-tile-value .unit { font-size: 10.5px; color: #a8b0a9; font-weight: 600; margin-right: 2px; }
+
+        .ingredient-chip {
+            font-size: 11.5px;
+            font-weight: 500;
+            padding: 4px 10px;
+            border-radius: 0.55rem;
+            background: rgba(255, 255, 255, 0.9);
+            color: #454b46;
+            box-shadow: 0 1px 2px rgba(45, 60, 48, 0.05);
+            white-space: nowrap;
+        }
+        .ingredient-chip-unknown {
+            background: rgba(255, 248, 230, 0.95);
+            color: #97641f;
+        }
+
+        .analysis-score-number {
+            font-size: 26px;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -0.02em;
+        }
+        .analysis-score-unit {
+            font-size: 12px;
+            font-weight: 600;
+            color: #a8b0a9;
+        }
+        .analysis-score-label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #a8b0a9;
+            margin-bottom: 2px;
+        }
+        .analysis-verdict-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            border-radius: 0.5rem;
+            letter-spacing: 0.01em;
+            margin-top: 0.4rem;
+        }
+        .analysis-product-name {
+            font-size: 15px;
+            font-weight: 700;
+            color: #253d2c;
+            line-height: 1.4;
+            overflow-wrap: break-word;
+        }
+        .analysis-brand {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #a8b0a9;
+            margin-bottom: 3px;
+        }
+
+        .icon { stroke-width: 2; }

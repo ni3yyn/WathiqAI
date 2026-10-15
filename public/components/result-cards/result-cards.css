@@ -1,0 +1,88 @@
+        /* Claims */
+        .claim-row {
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 0.85rem;
+            padding: 0.75rem 0.85rem;
+            transition: background 0.2s ease, transform 0.2s ease;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            overflow: hidden;
+            box-shadow: 0 1px 2px rgba(45, 60, 48, 0.03);
+        }
+        .claims-rail .claim-row { width: 296px; }
+        .claim-row:hover { background: rgba(255, 255, 255, 0.92); }
+        .claim-row-pass { background: rgba(232, 241, 233, 0.6); }
+        .claim-row-fail { background: rgba(254, 236, 236, 0.65); }
+        .claim-row-warn { background: rgba(255, 248, 230, 0.7); }
+
+        .claim-icon-wrap {
+            width: 24px; height: 24px;
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .claim-icon-pass { background: #558f62; color: white; }
+        .claim-icon-fail { background: #dc6c6c; color: white; }
+        .claim-icon-warn { background: #d99a3c; color: white; }
+
+        .claim-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #253d2c;
+            line-height: 1.45;
+            overflow-wrap: break-word;
+            word-break: break-word;
+        }
+        .claim-status-text {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            margin-top: 0.3rem;
+            overflow-wrap: break-word;
+        }
+        .claim-status-pass { color: #345b3c; }
+        .claim-status-fail { color: #a34141; }
+        .claim-status-warn { color: #97641f; }
+
+        .claim-confidence {
+            font-size: 9.5px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            padding: 2px 7px;
+            border-radius: 0.45rem;
+            background: rgba(255, 255, 255, 0.85);
+            color: #7c857d;
+            flex-shrink: 0;
+            box-shadow: 0 1px 2px rgba(45, 60, 48, 0.04);
+            white-space: nowrap;
+        }
+
+        .claim-explain {
+            font-size: 13px;
+            line-height: 1.75;
+            color: #454b46;
+            margin-top: 0.55rem;
+            overflow-wrap: break-word;
+            word-break: break-word;
+        }
+
+        .claim-ingredients {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 0.6rem;
+        }
+        .claim-ingredient {
+            font-size: 11px;
+            font-weight: 500;
+            padding: 3px 8px;
+            border-radius: 0.5rem;
+            background: rgba(255, 255, 255, 0.9);
+            color: #3f7249;
+            box-shadow: 0 1px 2px rgba(45, 60, 48, 0.05);
+            white-space: nowrap;
+        }

@@ -42,6 +42,20 @@ export interface AgentStateTracker {
     lastIngredientCheck?: any | null;
     /** Set by check_compatibility — the last interaction report shown. */
     lastCompatibility?: any | null;
+    /** Set by generate_usage_schedule — the induction calendar shown. */
+    lastUsageSchedule?: any | null;
+    /** Set by manage_cabinet — the cabinet snapshot shown. */
+    lastCabinet?: any | null;
+    /** Set by triage_reaction. */
+    lastTriage?: any | null;
+    /** Output structures (share card, shopping list, gift set, routine diff). */
+    lastExplanation?: any | null;
+    lastShare?: any | null;
+    lastShoppingList?: any | null;
+    lastGift?: any | null;
+    lastRoutineDiff?: any | null;
+    /** Set by the scan lane — what was read from the attached photo. */
+    lastLabelScan?: any | null;
     /** Set by product_contains — the last "does it contain X?" answer shown. */
     lastIngredientPresence?: any | null;
     /**
@@ -56,7 +70,7 @@ export interface AgentStateTracker {
 
 /** A one-turn "yes" shortcut: the fast lane offered this next step last turn. */
 export interface PendingOffer {
-    tool: 'find_alternatives' | 'compare_products' | 'check_compatibility';
+    tool: 'find_alternatives' | 'compare_products' | 'check_compatibility' | 'generate_usage_schedule' | 'manage_cabinet' | 'submit_contribution';
     args: any;
     turn: number;                // turnCount of the reply that made the offer
 }
@@ -72,6 +86,20 @@ export interface UserProfile {
     country?: string;             // preferred country of origin
     preferredBrands: string[];    // brands the user expressed liking for
     language?: 'ar' | 'fr' | 'en';
+    /** Arabic register the user writes in (sticky across short messages). */
+    register?: 'darija' | 'msa';
+    /** From the signed-in user's app profile (see agent/userContext.ts). */
+    name?: string;
+    gender?: 'female' | 'male';
+    conditions?: string[];
+    goals?: string[];
+    /** Session-only life stage (see modes.ts) — never persisted. */
+    lifeStage?: 'pregnancy' | 'teen';
+    /** avoid-list entries added automatically by the life stage (removed when it ends) */
+    autoAvoid?: string[];
+    /** Detected from the conversation (see climate.ts) — drives bioclimatic guidance. */
+    city?: string;
+    climateZone?: 'coastal_humid' | 'arid_saharan' | 'steppe_highland' | 'tell_temperate';
 }
 
 export interface DiscussedProduct {
@@ -101,6 +129,13 @@ export interface SessionState extends AgentStateTracker {
     profile: UserProfile;
     /** Goal memory (see goals.ts): what the user is trying to achieve. */
     mission?: import('./goals').Mission | null;
+    /** The user id for this request (cabinet owner; the VERIFIED uid when `authenticated`). Never persisted by the session. */
+    userId?: string;
+    /** Set when the request carried a verified Firebase identity (see src/auth). */
+    authenticated?: boolean;
+    /** The app-profile values last applied to the session profile (so chat overrides survive refreshes). */
+    authBaseline?: Record<string, any>;
+    authVersion?: string;
     /** Offer made by the previous fast-lane reply, executed on a bare "yes". */
     pendingOffer?: PendingOffer | null;
     /** Opt-in cross-session memory (see longterm.ts). */

@@ -1,0 +1,29 @@
+{"id": "g01", "message": "قيم لي Gamma Serum", "setup": {}, "expectTool": "evaluate_product"}
+{"id": "g02", "message": "evaluate CeraVe foaming cleanser", "setup": {}, "expectTool": "evaluate_product"}
+{"id": "g03", "message": "هل فيه عطر؟", "setup": {"lastProduct": true}, "expectTool": "product_contains"}
+{"id": "g04", "message": "does it contain alcohol?", "setup": {"lastProduct": true}, "expectTool": "product_contains"}
+{"id": "g05", "message": "هل أستعمل الريتينول مع فيتامين سي؟", "setup": {}, "expectTool": "check_compatibility"}
+{"id": "g06", "message": "can I use AHA and retinol together?", "setup": {}, "expectTool": "check_compatibility"}
+{"id": "g07", "message": "عندك بديل لهذا المنتج؟", "setup": {"lastProduct": true}, "expectTool": "find_alternatives"}
+{"id": "g08", "message": "بدّل الخطوة 2 بشي أرخص", "setup": {"lastRoutine": true}, "expectTool": "modify_routine"}
+{"id": "g09", "message": "remove step 3", "setup": {"lastRoutine": true}, "expectTool": "modify_routine"}
+{"id": "g10", "message": "Effaclar Duo بزاف غالي، راه يدير قريب 4800 دج فالفارماسي. عندك بديل محلي جزائري؟", "setup": {}, "expectTool": "find_actives_dupe"}
+{"id": "g11", "message": "شريت سيروم ريتينول 0.5%، كيفاش نستعملو باش ما يحرقليش وجهي؟", "setup": {}, "expectTool": "generate_usage_schedule"}
+{"id": "g12", "message": "وجهي راه يحرقني من ملي بديت الريتينول", "setup": {}, "expectTool": "triage_reaction"}
+{"id": "g13", "message": "my face is red and peeling after retinol", "setup": {}, "expectTool": "triage_reaction"}
+{"id": "g14", "message": "ça brûle depuis que j'ai commencé l'acide glycolique", "setup": {}, "expectTool": "triage_reaction"}
+{"id": "g15", "message": "ضيف هذا لخزانتي", "setup": {"lastProduct": true, "userId": true}, "expectTool": "manage_cabinet"}
+{"id": "g16", "message": "وريني خزانتي", "setup": {"userId": true}, "expectTool": "manage_cabinet"}
+{"id": "g17", "message": "ما ناسبنيش هذا المنتج", "setup": {"lastProduct": true, "userId": true}, "expectTool": "manage_cabinet"}
+{"id": "g18", "message": "اعطيني قائمة التسوق", "setup": {"lastRoutine": true}, "expectTool": "build_shopping_list"}
+{"id": "g19", "message": "شارك الروتين على واتساب", "setup": {"lastRoutine": true}, "expectTool": "share_routine"}
+{"id": "g20", "message": "ارجع للروتين الأول", "setup": {"lastRoutine": true}, "expectTool": "routine_versions"}
+{"id": "g21", "message": "أبغي نهدي ماما 3000 دج", "setup": {}, "expectTool": "build_gift_set"}
+{"id": "g22", "message": "علاش اخترت هذا؟", "setup": {"lastProduct": true}, "expectTool": "explain_pick"}
+{"id": "g23", "message": "قارن بينهما", "setup": {}, "expectTool": "compare_products"}
+{"id": "g24", "message": "لا، قصدي الغسول تاعهم مش السيروم!", "setup": {"correction": true}, "expectTool": "evaluate_product"}
+{"id": "g25", "message": "أريد روتين للبشرة الدهنية بصح ما رانيش حاب واقي شمس", "setup": {}, "expectTool": "build_routine"}
+{"id": "g26", "message": "أريد كريم للحمرة", "setup": {}, "expectTool": "!triage_reaction"}
+{"id": "g27", "message": "what is retinol?", "setup": {}, "expectTool": "!triage_reaction"}
+{"id": "g28", "message": "أريد سيروم يحتوي على نياسيناميد", "setup": {"lastProduct": true}, "expectTool": "!product_contains"}
+{"id": "g29", "message": "نعم", "setup": {}, "expectTool": null}

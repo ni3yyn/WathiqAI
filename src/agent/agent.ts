@@ -23,6 +23,31 @@ import {
     parseRoutineEdit, isContainsQuestion, isCompatQuestion, ALTERNATIVE_RE, CHEAPER_RE, foldMessage,
 } from './intents';
 import { newReqId, nowMs, logReq, isDebugEnabled } from './logger';
+import { findActivesDupe } from './tools/findActivesDupe';
+import { generateUsageSchedule } from './tools/generateUsageSchedule';
+import { tryScanLane } from './scanLane';
+import { parseContributionImages } from './contributionParser';
+import type { ChatImage } from './tools/scanShelfLabel';
+import { detectClimate, detectSeason, currentSeason, buildClimateContext } from './climate';
+import { isScheduleQuestion, parseDupeRequest } from './intents';
+import { detectVoice, buildVoiceContext, hasDarijaMarkers } from './voice';
+import {
+    isValidUserId, listItems, addItem, updateItem, removeItem, findItem, summarizeCabinet, cabinetGaps,
+    overlapWithCabinet, ownsProduct, dislikedIngredientLists, routineSeedFromCabinet, dislikeInsights,
+} from './cabinet';
+import { parseCabinetCommand, CABINET_WORDS } from './intents';
+import { triageReaction, looksLikeReaction, parseDaysAgo } from './tools/triageReaction';
+import { detectLifeStage, applyLifeStage, buildLifeStageContext } from './modes';
+import { recordRoutineVersion, versionsOf, currentVersion, undoRoutine, restoreVersion, diffRoutines, parseVersionCommand } from './routineHistory';
+import { buildRoutineShare, buildShoppingList } from './outputs';
+import { buildGiftSet } from './tools/buildGiftSet';
+import { suggestQuickReplies } from './quickReplies';
+import { parseOutputCommand, isWhyQuestion } from './intents';
+import { explainPick } from './explainPick';
+import { newMessageId, registerMessage } from './feedback';
+import { getUserContext, applyUserContext, backendUserProfile, buildUserContextLine, getUserPrefs, saveUserPrefs } from './userContext';
+import { detectConcepts, resolveAllConcepts as resolveConceptsInText } from './ingredientKnowledge';
+import { getConcept as getConceptLabel } from './ingredientKnowledge';
 import { analyzeNegation, findNegatedCategories, isPhraseNegated } from './negation';
 import { detectCorrection, lastActionWasEvaluation, Correction } from './corrections';
 import { activeMission, buildMissionContext, updateMissionAfterTurn } from './goals';
@@ -100,6 +125,18 @@ export interface ChatRequest {
      */
     userId?: string;
     rememberMe?: boolean;
+    /**
+     * Photos attached to this message (pack front / ingredient list). Accepts
+     * data: URLs, {data, mimeType, role} objects, or https URLs on the
+     * SCAN_ALLOWED_HOSTS allow-list. Triggers the scan lane (vision OCR →
+     * catalog match → OilGuard verdict).
+     */
+    images?: Array<ChatImage | string>;
+    /**
+     * Set ONLY by the server after verifying a Firebase ID token (never trusted from a
+     * client body — the auth layer overwrites it). When true, `userId` is the verified uid.
+     */
+    authenticated?: boolean;
 }
 
 function getNextGeminiApiKey(): string | undefined {
@@ -201,9 +238,11 @@ interface IntentHint {
 
 function detectCountryInMessage(msg: string): string | undefined {
     // Latin spellings
-    const latin = ['algeria', 'algerie', 'algérie', 'korea', 'corée', 'coree', 'france',
-                   'usa', 'united states', 'turkey', 'turquie', 'tunisia', 'tunisie',
-                   'egypt', 'égypte', 'germany', 'allemagne', 'italy', 'italie'];
+    const latin = ['algeria', 'algerie', 'algérie', 'algerian', 'algérien', 'algérienne',
+                   'korea', 'corée', 'coree', 'korean', 'france', 'french', 'français', 'française',
+                   'usa', 'united states', 'american', 'turkey', 'turquie', 'turkish',
+                   'tunisia', 'tunisie', 'tunisian', 'egypt', 'égypte', 'egyptian',
+                   'germany', 'allemagne', 'german', 'italy', 'italie', 'italian'];
     for (const c of latin) if (msg.includes(c)) return normalizeCountry(c);
     // Arabic spellings
     const arabic = ['الجزائر', 'دزاير', 'كوريا', 'فرنسا', 'أمريكا', 'تركيا', 'تونس', 'مصر', 'ألمانيا', 'إيطاليا'];
@@ -288,7 +327,7 @@ export function classifyIntent(
 
     // ── Evaluation-word detector (declared BEFORE the intent sections that
     //    consume it — brand, opinion, and product-evaluation all need it) ──
-    const evalWordRe = /قي[ّ]?م|قيّم|تقييم|evaluate|evaluer|évalue|analy[sz]|فحص|تحليل|\brate\b|\bscore\b/i;
+    const evalWordRe = /قي[ّ]?م|قيّم|تقييم|evaluate|evaluer|évalue|analy[sz]|فحص|تحليل|حلل|\brate\b|\bscore\b/i;
 
     // ── Unknown ingredients (highest-priority signal, low ambiguity) ──
     const unknownRe = /غير\s*معروف|غير\s*معروفة|مجهول|غير\s*مفهرس|ما\s*تعرفوهم|لا\s*تعرف|unknown|unrecognized|not\s*identified|non\s*reconnu|pas\s*reconnu|inconnu/i;
@@ -405,7 +444,10 @@ export function classifyIntent(
     if (evalWordRe.test(msg) && !hasBrandWord && !unknownRe.test(msg)) {
         signals.push({
             tool: 'evaluate_product',
-            weight: 75,
+            // 88 (was 75): an explicit "evaluate X" with no brand word is decisive
+            // unless a competing signal is within 20 points. At 75 the router was
+            // never "high", so the evaluation fast lane could not fire.
+            weight: 88,
             note: 'single-product evaluation request',
         });
     }
@@ -461,13 +503,18 @@ export function classifyIntent(
     }
 
     // ── General product search ──
-    if (/أبحث|ابحث|أريد|أعطني|هل\s*عندك|عندك|search|find|looking\s*for|recommend|show\s*me|أفضل|best|recommendation|je\s*cherche/i.test(msg)
+    const explicitSearchVerb = /أبحث|ابحث|أريد|اريد|أحتاج|احتاج|أعطني|اعطني|هل\s*عندك|عندك|\bi\s+want\b|\bwant\b|\bi\s+need\b|\bneed\b|\bi['’]d\s+like\b|\bi\s+would\s+like\b|\blooking\s+for\b|\bsearch\b|\bfind\b|\brecommend(?:ation)?\b|\bshow\s+me\b|أفضل|best|je\s*cherche|je\s*recherche|je\s*veux|je\s*voudrais|j['’]aimerais|propose/i.test(msg);
+    const structuredSearchNeed = !!categoryMention || !!hints.entities.country || !!hints.entities.budget
+        || /oily|greasy|dry skin|sensitive skin|combination skin|acne|dark spots|brighten|hydrating|moisturi[sz]|anti[- ]?dandruff|curly hair|damaged hair|بشرة|دهني|دهنية|جاف|جافة|حساسة|مختلطة|حب الشباب|تفتيح|بقع داكنة|قشرة|شعر تالف|نياسيناميد|niacinamide|retinol|ريتينول|salicylic acid|حمض الساليسيليك/i.test(msg);
+    if (explicitSearchVerb
         && !evalWordRe.test(msg)
         && !/روتين|routine/i.test(msg)) {
         signals.push({
             tool: 'search_products',
-            weight: 60,
-            note: 'product discovery request',
+            // Clear search intent plus an extractable target/constraint can run
+            // without waiting for an LLM tool-selection round trip.
+            weight: structuredSearchNeed ? 88 : 60,
+            note: structuredSearchNeed ? 'structured product discovery request' : 'product discovery request',
         });
     }
 
@@ -534,6 +581,52 @@ export function classifyIntent(
         });
     }
 
+    // ── v5: "why did you pick this?" — transparent, data-backed explanation ──
+    if (isWhyQuestion(raw) && (state.lastProduct || state.lastAnalysis || state.lastProductResults?.length)) {
+        for (let k = signals.length - 1; k >= 0; k--) if (signals[k].weight < 95) signals.splice(k, 1);
+        signals.push({ tool: 'explain_pick', weight: 95, note: 'asks WHY a product was recommended — call explain_pick and answer ONLY from its reasons/caveats; be honest about missing data' });
+    }
+
+    // ── v5: practical outputs (versions/undo, share, shopping list, gift) ──
+    const verCmd = parseVersionCommand(raw);
+    if (verCmd && state.lastRoutine) {
+        for (let k = signals.length - 1; k >= 0; k--) if (['build_routine', 'modify_routine', 'search_products'].includes(signals[k].tool) && signals[k].weight < 96) signals.splice(k, 1);
+        signals.push({ tool: 'routine_versions', weight: 96, note: `routine history command (${verCmd.action}${verCmd.version ? ` ${verCmd.version}` : ''}) — call routine_versions; never rebuild the routine` });
+    }
+    const outCmd = parseOutputCommand(raw);
+    if (outCmd && (outCmd.kind === 'gift' || state.lastRoutine || state.lastProductResults?.length)) {
+        const tool = outCmd.kind === 'gift' ? 'build_gift_set' : outCmd.kind === 'shopping' ? 'build_shopping_list' : 'share_routine';
+        if (tool !== 'share_routine' || state.lastRoutine) {
+            for (let k = signals.length - 1; k >= 0; k--) if (['build_routine', 'search_products', 'modify_routine', 'evaluate_product'].includes(signals[k].tool) && signals[k].weight < 96) signals.splice(k, 1);
+            signals.push({ tool, weight: 96, note: `${outCmd.kind} request${outCmd.budget ? ` (budget ${outCmd.budget} DZD)` : ''} — call ${tool}` });
+        }
+    }
+
+    // ── v5: reaction triage ("my face is burning after the retinol") — safety first ──
+    if (looksLikeReaction(raw)) {
+        for (let k = signals.length - 1; k >= 0; k--) {
+            if (signals[k].weight < 97) signals.splice(k, 1);
+        }
+        signals.push({
+            tool: 'triage_reaction',
+            weight: 98,
+            note: 'the user reports a skin REACTION (burning/redness/peeling/itching/swelling/breakout after a product) — call triage_reaction FIRST; calm, short, stop-using advice before anything else; never recommend products in this reply',
+        });
+    }
+
+    // ── v5: "my cabinet" commands (add / list / mark finished / didn't suit / remove) ──
+    const cabCmd = parseCabinetCommand(raw);
+    if (cabCmd) {
+        for (let k = signals.length - 1; k >= 0; k--) {
+            if (['search_products', 'evaluate_product', 'get_product', 'find_alternatives'].includes(signals[k].tool) && signals[k].weight < 96) signals.splice(k, 1);
+        }
+        signals.push({
+            tool: 'manage_cabinet',
+            weight: 96,
+            note: `cabinet command (${cabCmd.action}${cabCmd.status ? `, status=${cabCmd.status}` : ''}${cabCmd.verdict ? `, verdict=${cabCmd.verdict}` : ''}) about the product in context — call manage_cabinet`,
+        });
+    }
+
     // ── Correction pivot: the user told us we picked the wrong thing ──
     if (correction && correction.category) {
         const pivotToEvaluation = lastActionWasEvaluation(state);
@@ -544,6 +637,29 @@ export function classifyIntent(
             tool: pivotToEvaluation ? 'evaluate_product' : 'search_products',
             weight: 97,
             note: `CORRECTION — the user means the ${correction.category} of the SAME brand/context, not the previous product. Latest statement wins: one short "عذراً" at most, then ${pivotToEvaluation ? 'evaluate that product' : 'show that brand\'s products in this category'} immediately; do not ask which one they meant if context identifies it`,
+        });
+    }
+
+    // ── v4: imported-product dupes, induction schedules ──
+    const dupeReq = parseDupeRequest(raw);
+    if (dupeReq) {
+        for (let k = signals.length - 1; k >= 0; k--) {
+            if (['search_products', 'find_alternatives', 'evaluate_product', 'get_product'].includes(signals[k].tool) && signals[k].weight < 97) signals.splice(k, 1);
+        }
+        signals.push({
+            tool: 'find_actives_dupe',
+            weight: dupeReq.reference ? 97 : 93,
+            note: `wants a LOCAL equivalent of ${dupeReq.reference ? `"${dupeReq.reference.label}"` : 'an imported/expensive product'} — call find_actives_dupe (reference_product${dupeReq.price ? `, reference_price=${dupeReq.price}` : ''}${dupeReq.local ? ', country="Algeria"' : ''}; pass target_actives from the product's known key actives if it is not a well-known import). Never state concentrations that are not in the catalog.`,
+        });
+    }
+    if (isScheduleQuestion(raw).yes) {
+        for (let k = signals.length - 1; k >= 0; k--) {
+            if (['search_products', 'evaluate_product', 'get_product', 'check_compatibility'].includes(signals[k].tool) && signals[k].weight < 94) signals.splice(k, 1);
+        }
+        signals.push({
+            tool: 'generate_usage_schedule',
+            weight: 94,
+            note: 'asks how to START a potent active safely — call generate_usage_schedule (induction calendar), not a generic textbook answer',
         });
     }
 
@@ -561,21 +677,31 @@ export function classifyIntent(
     }
 
     // ─── Rank signals and decide whether to speak ───
+    // Several regexes can describe the same tool. Without deduplication, a
+    // second copy is mistaken for a competing intent and downgrades a clear
+    // request (e.g. "find a cheap serum") from high to medium confidence.
     signals.sort((a, b) => b.weight - a.weight);
+    const uniqueSignals: typeof signals = [];
+    for (const signal of signals) {
+        const existing = uniqueSignals.findIndex(s => s.tool === signal.tool);
+        if (existing < 0) uniqueSignals.push(signal);
+        else if (signal.weight > uniqueSignals[existing].weight) uniqueSignals[existing] = signal;
+    }
+    uniqueSignals.sort((a, b) => b.weight - a.weight);
 
-    if (signals.length === 0) {
+    if (uniqueSignals.length === 0) {
         // No intent signal — return an empty hint so the model gets a clean message.
         return hints;
     }
 
-    const top = signals[0];
-    const second = signals[1];
+    const top = uniqueSignals[0];
+    const second = uniqueSignals[1];
 
     // Confidence: high only if top is strong AND there's no close competitor.
     const isDecisive = top.weight >= 85 && (!second || top.weight - second.weight >= 20);
     const isLikely = top.weight >= 60;
 
-    hints.likelyTools = signals.slice(0, 3).map(s => s.tool);
+    hints.likelyTools = uniqueSignals.slice(0, 3).map(s => s.tool);
     hints.note = top.note;
     hints.confidence = isDecisive ? 'high' : isLikely ? 'medium' : 'low';
 
@@ -709,6 +835,22 @@ async function buildModelMessages(request: ChatRequest, state: SessionState) {
         trailing.push(`[Context: Brand reference resolved — "their" = brand "${brandRef.brand}" (category: ${brandRef.category}). Use evaluate_brand with focusCategory="${brandRef.category}" or search_products(brand="${brandRef.brand}", category="${brandRef.category}") as appropriate.]`);
     }
 
+    // ─── SIGNED-IN USER: profile, shelf, routines from the app ───
+    const userLine = buildUserContextLine(state);
+    if (userLine) trailing.push(userLine);
+
+    // ─── LIFE STAGE (pregnancy / teen) ───
+    const stageLine = buildLifeStageContext(state.profile as any);
+    if (stageLine) trailing.push(stageLine);
+
+    // ─── VOICE: Darija / MSA register + mood (distressed → calm, safety first) ───
+    const voiceLine = buildVoiceContext(detectVoice(request.message, state.profile));
+    if (voiceLine) trailing.push(voiceLine);
+
+    // ─── BIOCLIMATIC CONTEXT (Saharan arid vs coastal humid vs highland winter…) ───
+    const climateLine = buildClimateContext(state.profile, detectSeason(request.message) || currentSeason());
+    if (climateLine) trailing.push(climateLine);
+
     // ─── ACTIVE MISSION: keep the user's goal alive across side questions ───
     const missionLine = buildMissionContext(state, intent.likelyTools.length === 0 && !intent.correction);
     if (missionLine) trailing.push(missionLine);
@@ -755,14 +897,12 @@ async function buildModelMessages(request: ChatRequest, state: SessionState) {
 // model left in tool args — the model's explicit choices always win.
 
 /** True when the search context is about HAIR (category or query words). */
-function isHairContext(args: any): boolean {
-    const cat = String(args.category || '').toLowerCase();
-    if (/hair|shampoo|conditioner/.test(cat)) return true;
-    const q = normalizeArabicText(args.query || '');
-    return /شعر|فروه|hair|cheveux/.test(q);
+function isHairContext(args: any, userMessage = ''): boolean {
+    const context = normalizeArabicText(`${args.category || ''} ${args.query || ''} ${userMessage}`).toLowerCase();
+    return /hair|shampoo|conditioner|capillary|cheveux|shampoing|apres.?shampoing|شعر|فرو[هة]|شامبو|بلسم|ماسك.?شعر/.test(context);
 }
 
-function autofillSearchArgs(args: any, state: SessionState): any {
+function autofillSearchArgs(args: any, state: SessionState, userMessage = ''): any {
     const out = { ...args };
     const p = state.profile;
 
@@ -772,13 +912,12 @@ function autofillSearchArgs(args: any, state: SessionState): any {
         out.exclude_ingredients = avoid;
     }
 
-    // Skin/hair type: only when the model didn't specify and the context fits.
-    if (!out.skin_type && !out.hair_type) {
-        if (isHairContext(out) && p.hairType) {
-            out.hair_type = p.hairType;
-        } else if (!isHairContext(out) && p.skinType) {
-            out.skin_type = p.skinType;
-        }
+    // Apply the profile preference relevant to this search independently.
+    // A model-provided value for the other dimension must not block this fallback.
+    if (isHairContext(out, userMessage)) {
+        if (!out.hair_type && p.hairType) out.hair_type = p.hairType;
+    } else if (!out.skin_type && p.skinType) {
+        out.skin_type = p.skinType;
     }
 
     // Country preference: apply only when user gave no country at all.
@@ -800,13 +939,11 @@ function autofillEvaluateProfile(args: any, state: SessionState): any {
     const out = { ...args };
     const p = state.profile;
     const hasProfileData = p.allergies.length > 0 || p.skinType || p.hairType;
-    if (!out.user_profile && hasProfileData) {
-        out.user_profile = {
-            allergies: [...p.allergies, ...p.avoidIngredients],
-            conditions: [],
-            skinType: p.skinType,
-            scalpType: p.hairType && p.hairType.includes('فروة') ? p.hairType : undefined,
-        };
+    if (state.authenticated) {
+        // signed-in: the app's own profile (raw ids), so scores match the ones shown in the app
+        out.user_profile = backendUserProfile(state);
+    } else if (!out.user_profile && hasProfileData) {
+        out.user_profile = backendUserProfile(state);
     }
     return out;
 }
@@ -836,9 +973,8 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                 offset: z.number().optional().describe('Skip the first N results. For "show me more / المزيد / غيرهم", pass the nextOffset returned by your previous search_products call.')
             }),
             execute: async (args: any) => {
-                console.log('[AGENT TOOL] Executing search_products with args:', args);
                 try {
-                    const filledArgs = autofillSearchArgs(args, state);
+                    const filledArgs = autofillSearchArgs(args, state, userMessage);
                     const result = await searchProducts(filledArgs);
 
                     // Remember the MODEL-FACING args (not the profile-autofilled
@@ -1251,6 +1387,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                 })).optional().describe('Products the user explicitly asked to include in the routine. Leave empty when the user just wants a normal routine.'),
                 include_last_product: z.boolean().optional().describe('Set to true when the user says "including that product" / "with this one" / "مع هذا المنتج" — the tool will force-include the product most recently discussed in this session (resolved from session state, no need to copy its ID).'),
                 exclude_categories: z.array(z.string()).optional().describe('Step categories the user does NOT want ("ما نبغيش واقي شمس" → ["sunscreen"], "no toner" → ["toner"]). The router lists them as USER_EXCLUDED.'),
+                use_cabinet: z.boolean().optional().describe('Build AROUND the products the user already owns (their cabinet) and only fill the gaps — for "بالي عندي / with what I own / avec ce que j\'ai".'),
                 excluded_product_ids: z.array(z.string()).optional().describe('Product IDs to keep OUT of the routine ("بدون منتج فينوس", "not that cleanser" — take IDs from the [Context: ...] tags).'),
             }),
             execute: async (args: any) => {
@@ -1268,6 +1405,12 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                             const top = state.lastProductResults[0];
                             requiredProducts = [{ id: top.id, name: top.name }];
                         }
+                    }
+
+                    if (args.use_cabinet && state.userId) {
+                        const owned = routineSeedFromCabinet(listItems(state.userId));
+                        const have = new Set((requiredProducts || []).map((r: any) => r.id));
+                        requiredProducts = [...(requiredProducts || []), ...owned.filter(id => !have.has(id)).map(id => ({ id }))];
                     }
 
                     const result = await buildRoutine({
@@ -1291,6 +1434,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                         return { error: result.error, requiredNotPlaced: (result as any).requiredNotPlaced };
                     }
                     state.lastRoutine = result;
+                    recordRoutineVersion(state, result, 'build');
                     turnState.lastRoutine = result;
                     recordDiscussedProducts(
                         state,
@@ -1463,12 +1607,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                     const result = await compareProducts({
                         products: requested,
                         focus: args.focus,
-                        user_profile: {
-                            allergies: [...state.profile.allergies, ...state.profile.avoidIngredients],
-                            conditions: [],
-                            skinType: state.profile.skinType,
-                            scalpType: state.profile.hairType && state.profile.hairType.includes('فروة') ? state.profile.hairType : undefined,
-                        },
+                        user_profile: backendUserProfile(state),
                     });
 
                     if ((result as any).error) return { error: (result as any).error };
@@ -1514,12 +1653,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                         ingredients_text: args.ingredients_text,
                         product_type: args.product_type,
                         label: args.label,
-                        user_profile: {
-                            allergies: [...state.profile.allergies, ...state.profile.avoidIngredients],
-                            conditions: [],
-                            skinType: state.profile.skinType,
-                            scalpType: state.profile.hairType && state.profile.hairType.includes('فروة') ? state.profile.hairType : undefined,
-                        },
+                        user_profile: backendUserProfile(state),
                     });
 
                     if ((result as any).error) return { error: (result as any).error };
@@ -1607,12 +1741,15 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                     if (!productId && !productName) {
                         return { error: 'لم أعرف أي منتج تريد له بديلاً. اذكر اسمه أو اطلب بحثاً أولاً.' };
                     }
+                    const cab = state.userId ? listItems(state.userId) : [];
                     const result: any = await findAlternatives({
                         productId, productName,
                         cheaper_only: args.cheaper_only,
                         country: args.country || state.profile.country,
                         avoid: [...state.profile.allergies, ...state.profile.avoidIngredients],
-                        exclude_product_ids: (state.lastProductResults || []).map((p: any) => p.id),
+                        // never suggest what the user already owns, nor near-copies of what did not suit them
+                        exclude_product_ids: [...(state.lastProductResults || []).map((p: any) => p.id), ...cab.filter(i => i.productId && (i.status === 'using' || i.status === 'finished')).map(i => i.productId!)],
+                        disliked_lists: dislikedIngredientLists(cab),
                     });
                     if (result.candidates?.length) {
                         turnState.lastProductResults = result.candidates;
@@ -1660,7 +1797,13 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                             productIds = state.lastProductResults.slice(0, 4).map((p: any) => p.id).filter(Boolean);
                         }
                     }
-                    const result: any = await checkCompatibility({ productIds, actives });
+                    let extraItems: Array<{ label: string; ingredients: string[] }> | undefined;
+                    if (productIds.length === 0 && actives.length === 0 && state.userId) {
+                        const cab = listItems(state.userId).filter(i => i.status === 'using');
+                        productIds = cab.filter(i => i.productId).map(i => i.productId!);
+                        extraItems = cab.filter(i => !i.productId && i.ingredients?.length).map(i => ({ label: `${i.brand} ${i.name}`.trim(), ingredients: i.ingredients! }));
+                    }
+                    const result: any = await checkCompatibility({ productIds, actives, extraItems });
                     if (result.error) return { error: result.error };
                     state.lastCompatibility = result;
                     turnState.lastCompatibility = result;
@@ -1692,6 +1835,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                     if (result.error) return { error: result.error };
                     state.lastRoutine = result;
                     turnState.lastRoutine = result;
+                    recordRoutineVersion(state, result, `${result.modification?.action || 'edit'}${args.step_number ? ` step ${args.step_number}` : ''}${args.category ? ` ${args.category}` : ''}`);
                     recordDiscussedProducts(state, result.steps.map((s: any) => ({ ...s.product })), 'routine');
                     return {
                         title: result.title,
@@ -1708,6 +1852,360 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                 } catch (err: any) {
                     console.error('[AGENT TOOL] modify_routine error:', err.message);
                     return { error: `Routine edit failed: ${err.message}` };
+                }
+            }
+        }),
+
+        explain_pick: tool({
+            description: 'Explain WHY a product was recommended (filters it matched, actives, price vs budget, OilGuard score, avoid-list) and how much data we actually have on it (caveats: brand claims vs proof, missing price/ingredients). Defaults to the product in context.',
+            inputSchema: z.object({ productId: z.string().optional() }),
+            execute: async (args: any) => {
+                try {
+                    const ref = resolveProductReference(userMessage, state);
+                    const id = args.productId || ref?.product?.id || state.lastProduct?.id || state.lastAnalysis?.productId || state.lastProductResults?.[0]?.id;
+                    if (!id) return { error: 'لم أعرف أي منتج تقصد.' };
+                    const r = await getProduct({ productId: id });
+                    if (!r.found || !r.product) return { error: 'لم أجد المنتج.' };
+                    const ev = state.lastAnalysis?.productId === id ? (state.lastAnalysis as any).evaluation : null;
+                    const results = (state.lastProductResults || []) as any[];
+                    const idx = results.findIndex(x => x.id === id);
+                    const cab = state.userId ? listItems(state.userId) : [];
+                    const out = explainPick(r.product, {
+                        searchArgs: state.lastSearchArgs || undefined,
+                        evaluation: ev ? {
+                            score: ev.oilGuardScore, safety: ev.safety?.score, efficacy: ev.efficacy?.score,
+                        } : undefined,
+                        ownedByUser: !!ownsProduct(cab, id),
+                        avoid: [...state.profile.allergies, ...state.profile.avoidIngredients],
+                        profile: { skinType: state.profile.skinType, country: state.profile.country, budgetMax: state.profile.budgetMax },
+                        rank: idx >= 0 ? { index: idx, total: results.length } : undefined,
+                    });
+                    state.lastExplanation = out; turnState.lastExplanation = out;
+                    return out;
+                } catch (err: any) {
+                    return { error: `Explanation failed: ${err.message}` };
+                }
+            }
+        }),
+
+        routine_versions: tool({
+            description: 'Routine history: undo the last change, restore a numbered version ("go back to the first routine"), list versions, or compare the current routine with the previous one. Use instead of rebuilding.',
+            inputSchema: z.object({
+                action: z.enum(['undo', 'restore', 'list', 'compare']),
+                version: z.number().optional().describe('Version number for restore.'),
+            }),
+            execute: async (args: any) => {
+                console.log('[AGENT TOOL] Executing routine_versions with args:', args);
+                try {
+                    const list = versionsOf(state);
+                    if (list.length === 0) return { error: 'لا توجد نسخ سابقة للروتين بعد.' };
+                    const brief = (v: any) => ({ version: v.n, label: v.label, totalCost: v.routine.totalCost, steps: v.routine.steps.map((s: any) => `${s.stepName}: ${s.product.brand} ${s.product.name}`) });
+                    if (args.action === 'list') return { current: currentVersion(state)?.n, versions: list.map(brief) };
+                    if (args.action === 'compare') {
+                        const cur = currentVersion(state);
+                        const idx = cur ? list.findIndex(v => v.n === cur.n) : -1;
+                        if (!cur || idx <= 0) return { error: 'أحتاج نسختين على الأقل للمقارنة.' };
+                        const diff = diffRoutines(list[idx - 1], cur);
+                        state.lastRoutineDiff = diff; turnState.lastRoutineDiff = diff;
+                        return { diff };
+                    }
+                    const v = args.action === 'undo' ? undoRoutine(state) : restoreVersion(state, args.version || 1);
+                    if (!v) return { error: args.action === 'undo' ? 'هذه هي النسخة الأولى، لا يوجد ما أتراجع إليه.' : 'لم أجد هذه النسخة.' };
+                    turnState.lastRoutine = state.lastRoutine;
+                    return { restored: brief(v) };
+                } catch (err: any) {
+                    return { error: `Routine history failed: ${err.message}` };
+                }
+            }
+        }),
+
+        share_routine: tool({
+            description: 'Create the shareable version of the CURRENT routine: a card plus WhatsApp-ready text (steps, products, prices, total).',
+            inputSchema: z.object({}),
+            execute: async () => {
+                try {
+                    if (!state.lastRoutine) return { error: 'لا يوجد روتين لمشاركته بعد.' };
+                    const share = buildRoutineShare(state.lastRoutine, detectVoice(userMessage, state.profile).tlang);
+                    state.lastShare = share; turnState.lastShare = share;
+                    return { title: share.title, total: share.total, whatsappText: share.whatsappText };
+                } catch (err: any) {
+                    return { error: `Share failed: ${err.message}` };
+                }
+            }
+        }),
+
+        build_shopping_list: tool({
+            description: 'Shopping list for the current routine (or last search results): ordered by what to buy first, products the user already owns (cabinet) removed from the total, unknown prices counted honestly.',
+            inputSchema: z.object({ budget: z.number().optional() }),
+            execute: async (args: any) => {
+                try {
+                    const cab = state.userId ? listItems(state.userId) : [];
+                    if (!state.lastRoutine && !(state.lastProductResults || []).length) return { error: 'لا يوجد روتين أو نتائج بحث لبناء قائمة منها.' };
+                    const list = buildShoppingList({
+                        routine: state.lastRoutine || undefined,
+                        products: state.lastRoutine ? undefined : (state.lastProductResults || []).slice(0, 6),
+                        cabinet: cab, budget: args.budget, lang: detectVoice(userMessage, state.profile).tlang,
+                    });
+                    state.lastShoppingList = list; turnState.lastShoppingList = list;
+                    return { toBuy: list.toBuy.map(i => ({ name: `${i.brand} ${i.name}`, price: i.priceKnown ? i.price : null })), alreadyOwned: list.owned.map(i => `${i.brand} ${i.name}`), total: list.total, overBudget: list.overBudget, buyFirst: list.buyFirst };
+                } catch (err: any) {
+                    return { error: `Shopping list failed: ${err.message}` };
+                }
+            }
+        }),
+
+        build_gift_set: tool({
+            description: 'A safe-by-default gift set within a budget: gentle, fragrance-free, no potent actives. Needs a budget in DZD.',
+            inputSchema: z.object({
+                budget: z.number().describe('Gift budget in DZD.'),
+                recipient: z.string().optional().describe('Who it is for ("mom", "friend").'),
+                skin_type: z.string().optional(),
+            }),
+            execute: async (args: any) => {
+                console.log('[AGENT TOOL] Executing build_gift_set with args:', args);
+                try {
+                    const result: any = await buildGiftSet({ ...args, country: state.profile.country, avoid: [...state.profile.allergies] });
+                    if (result.error) return { error: result.error };
+                    state.lastGift = result; turnState.lastGift = result;
+                    return {
+                        title: result.title, recipient: result.recipient, totalCost: result.totalCost, maxBudget: result.maxBudget,
+                        items: result.steps.map((s: any) => ({ name: s.stepName, product: `${s.product.brand} ${s.product.name}`, price: s.product.price })),
+                        giftNotes: result.giftNotes,
+                    };
+                } catch (err: any) {
+                    return { error: `Gift set failed: ${err.message}` };
+                }
+            }
+        }),
+
+        triage_reaction: tool({
+            description: 'Safety-first triage when the user reports a skin REACTION (burning, redness, peeling, itching, swelling, new breakouts) after a product/active. Checks red flags, separates irritation / suspected allergy / purge, ranks likely culprits among what they use, and gives a stop-and-repair plan. Never diagnoses; never recommend products in the same reply.',
+            inputSchema: z.object({
+                symptoms: z.array(z.string()).optional().describe('Symptoms in the user\'s words (burning, redness, peeling, itching, swelling, hives, blisters, breakout, dryness).'),
+                severity: z.enum(['mild', 'moderate', 'severe']).optional(),
+                suspected_actives: z.array(z.string()).optional().describe('Actives/products the user thinks caused it, any language.'),
+                days_since_started: z.number().optional().describe('How many days ago they started the suspected product/active.'),
+            }),
+            execute: async (args: any) => {
+                console.log('[AGENT TOOL] Executing triage_reaction with args:', args);
+                try {
+                    const IRR = ['retinoid', 'aha', 'bha', 'benzoyl', 'vitc', 'azelaic', 'fragrance', 'alcohol', 'essential_oil', 'sulfate'];
+                    const since = parseDaysAgo(userMessage) ?? args.days_since_started;
+                    const byLabel = new Map<string, { label: string; keys: string[]; startedDaysAgo?: number }>();
+                    const put = (label: string, keys: string[], startedDaysAgo?: number) => {
+                        if (!keys.length) return;
+                        const cur = byLabel.get(label);
+                        byLabel.set(label, { label, keys: Array.from(new Set([...(cur?.keys || []), ...keys])), startedDaysAgo: startedDaysAgo ?? cur?.startedDaysAgo });
+                    };
+                    // 1. actives named in the message / by the model — the user suspects THEM, so recency applies
+                    for (const c of resolveConceptsInText(`${userMessage} ${(args.suspected_actives || []).join(' ')}`)) {
+                        if (IRR.includes(c.key)) put(c.label.ar, [c.key], since);
+                    }
+                    // 2. products of the current routine
+                    const ids: string[] = (state.lastRoutine?.steps || []).map((x: any) => x.product?.id).filter(Boolean);
+                    if (ids.length === 0 && (state.lastProduct?.id || state.lastAnalysis?.productId)) ids.push(state.lastProduct?.id || state.lastAnalysis?.productId);
+                    const looked = await Promise.all(ids.slice(0, 8).map(id => getProductsDetails({ productIds: [id] })));
+                    looked.forEach(r => {
+                        const pr = r.products[0]; if (!pr) return;
+                        const list = pr.ingredients.split('،').map((x: string) => x.trim()).filter(Boolean);
+                        put(`${pr.brand} ${pr.name}`.trim(), [...detectConcepts(list, IRR).keys()]);
+                    });
+                    // 3. cabinet items in use (with how long they have been using them)
+                    if (state.userId) {
+                        for (const it of listItems(state.userId).filter(i => i.status === 'using')) {
+                            const keys = new Set<string>(it.actives.filter(a => IRR.includes(a)));
+                            if (it.ingredients) for (const k of detectConcepts(it.ingredients, IRR).keys()) keys.add(k);
+                            const days = it.startedAt ? Math.floor((Date.now() - Date.parse(it.startedAt)) / 86400000) : undefined;
+                            put(`${it.brand} ${it.name}`.trim(), [...keys], days);
+                        }
+                    }
+                    const result = triageReaction({
+                        text: userMessage,
+                        symptoms: args.symptoms,
+                        severity: args.severity,
+                        candidates: [...byLabel.values()],
+                        pregnant: (state.profile as any).lifeStage === 'pregnancy',
+                        scheduleActive: state.lastUsageSchedule?.active,
+                    });
+                    state.lastTriage = result;
+                    turnState.lastTriage = result;
+                    return result;
+                } catch (err: any) {
+                    console.error('[AGENT TOOL] triage_reaction error:', err.message);
+                    return { error: `Triage failed: ${err.message}` };
+                }
+            }
+        }),
+
+        manage_cabinet: tool({
+            description: 'The user\'s personal cabinet of products they own/use/tried. Actions: add (a catalog product by id/name, or a manual/scanned one with brand+name+ingredients_text), list, update (status using|finished|wishlist|stopped, verdict loved|ok|didnt_suit, note), remove, check (does the user already own something with the same actives?). Defaults to the product in context.',
+            inputSchema: z.object({
+                action: z.enum(['add', 'list', 'update', 'remove', 'check']),
+                product_id: z.string().optional(),
+                product_name: z.string().optional(),
+                brand: z.string().optional(),
+                name: z.string().optional(),
+                ingredients_text: z.string().optional().describe('INCI list for a product not in the catalog.'),
+                category: z.string().optional(),
+                status: z.enum(['using', 'finished', 'wishlist', 'stopped']).optional(),
+                verdict: z.enum(['loved', 'ok', 'didnt_suit']).optional(),
+                note: z.string().optional(),
+                reason: z.string().optional().describe('Why it did not suit ("burning", "breakouts"…).'),
+                item_id: z.string().optional(),
+            }),
+            execute: async (args: any) => {
+                console.log('[AGENT TOOL] Executing manage_cabinet with args:', args);
+                try {
+                    const uid = state.userId;
+                    if (!uid) {
+                        return { error: 'no_user', message: 'الخزانة الشخصية تتطلب حساباً/معرّفاً للمستخدم؛ سجّل الدخول (أو فعّل حفظ منتجاتي) ثم أعد المحاولة.' };
+                    }
+                    const ctxProductId = state.lastProduct?.id || state.lastAnalysis?.productId;
+                    const trim = (it: any) => ({
+                        id: it.id, brand: it.brand, name: it.name, status: it.status, verdict: it.verdict,
+                        category: it.category, actives: it.actives.map((k: string) => getConceptLabel(k)?.label.ar || k),
+                    });
+                    const publish = (items: any[], highlight?: any) => {
+                        const summary = summarizeCabinet(items);
+                        const card = { items, summary, highlight: highlight || null };
+                        state.lastCabinet = card; turnState.lastCabinet = card;
+                        return summary;
+                    };
+
+                    if (args.action === 'list') {
+                        const items = listItems(uid);
+                        const summary = publish(items);
+                        return { count: items.length, items: items.slice(0, 30).map(trim), gaps: summary.gaps, valueInUse: summary.valueInUse, dislikeInsights: summary.dislikes.commonConcepts };
+                    }
+
+                    if (args.action === 'add') {
+                        const r = await addItem(uid, {
+                            productId: args.product_id || (!args.product_name && !args.name ? ctxProductId : undefined),
+                            productName: args.product_name, brand: args.brand, name: args.name,
+                            ingredientsText: args.ingredients_text, category: args.category,
+                            status: args.status, verdict: args.verdict, note: args.note,
+                            source: args.ingredients_text && !args.product_id ? 'scan' : undefined,
+                        });
+                        if (!r.ok) {
+                            if (r.candidates?.length) {
+                                turnState.lastProductResults = r.candidates;
+                                recordDiscussedProducts(state, r.candidates, 'search');
+                                return { status: 'ambiguous', message: 'Several products match; candidate cards were shown.', candidates: r.candidates.map((c: any) => `${c.brand} ${c.name} (${c.id})`) };
+                            }
+                            return { error: r.error };
+                        }
+                        const items = listItems(uid);
+                        publish(items, r.item);
+                        return {
+                            added: trim(r.item), created: r.created, alreadyHadIt: !!r.duplicateOf,
+                            overlap: r.overlap.slice(0, 3).map(o => ({ with: `${o.item.brand} ${o.item.name}`, sharedActives: o.sharedActives.map(k => getConceptLabel(k)?.label.ar || k) })),
+                            gaps: cabinetGaps(items),
+                        };
+                    }
+
+                    if (args.action === 'check') {
+                        const items = listItems(uid);
+                        const id = args.product_id || ctxProductId;
+                        const own = id ? ownsProduct(items, id) : null;
+                        let actives: string[] = [];
+                        if (id) {
+                            const r = await getProductsDetails({ productIds: [id] });
+                            const ing = (r.products[0]?.ingredients || '').split('،').map(x => x.trim()).filter(Boolean);
+                            const { detectActives } = await import('./ingredientKnowledge');
+                            actives = [...detectActives(ing).keys()];
+                        }
+                        return {
+                            ownsIt: own ? trim(own) : null,
+                            overlap: overlapWithCabinet(items, actives).slice(0, 3).map(o => ({ with: `${o.item.brand} ${o.item.name}`, sharedActives: o.sharedActives.map(k => getConceptLabel(k)?.label.ar || k) })),
+                        };
+                    }
+
+                    // update / remove — find the item
+                    const items = listItems(uid);
+                    const target = findItem(items, { id: args.item_id, productId: args.product_id || (!args.product_name ? ctxProductId : undefined), text: args.product_name || args.name });
+                    if (!target) return { error: 'item_not_found', message: 'لم أجد هذا المنتج في خزانتك.' };
+
+                    if (args.action === 'remove') {
+                        removeItem(uid, target.id);
+                        publish(listItems(uid));
+                        return { removed: trim(target) };
+                    }
+                    const updated = updateItem(uid, target.id, { status: args.status, verdict: args.verdict, note: args.note, reason: args.reason });
+                    const after = listItems(uid);
+                    publish(after, updated);
+                    return { updated: updated ? trim(updated) : null, dislikeInsights: dislikeInsights(after).commonConcepts };
+                } catch (err: any) {
+                    console.error('[AGENT TOOL] manage_cabinet error:', err.message);
+                    return { error: `Cabinet operation failed: ${err.message}` };
+                }
+            }
+        }),
+
+        find_actives_dupe: tool({
+            description: 'Find catalog (e.g. Algerian) products that share the KEY ACTIVES of a reference product — usually an expensive imported one that is NOT in the catalog (CeraVe, Effaclar Duo+, The Ordinary, COSRX…). Pass reference_price (what it costs) so only cheaper ones are returned and savings are computed.',
+            inputSchema: z.object({
+                reference_product: z.string().optional().describe('Name of the product being replaced, as the user wrote it.'),
+                target_actives: z.array(z.string()).optional().describe('Its key actives, any language ("niacinamide", "salicylic acid", "zinc"). Give them when the product is not a well-known import.'),
+                category: z.string().optional().describe('Category of the reference (cleanser, lotion_cream, skin_serum, sunscreen, toner…).'),
+                country: z.string().optional().describe('Preferred origin, "Algeria" when the user wants a local/Algerian dupe.'),
+                reference_price: z.number().optional().describe('Price of the reference in DZD.'),
+            }),
+            execute: async (args: any) => {
+                console.log('[AGENT TOOL] Executing find_actives_dupe with args:', args);
+                try {
+                    const cab = state.userId ? listItems(state.userId) : [];
+                    const result: any = await findActivesDupe({
+                        ...args,
+                        country: args.country || state.profile.country,
+                        avoid: [...state.profile.allergies, ...state.profile.avoidIngredients],
+                        exclude_product_ids: [...(state.lastProductResults || []).map((p: any) => p.id), ...cab.filter(i => i.productId && (i.status === 'using' || i.status === 'finished')).map(i => i.productId!)],
+                        disliked_lists: dislikedIngredientLists(cab),
+                    });
+                    if (result.error) return { error: result.error, reference: result.reference };
+                    state.lastProductResults = result.products;
+                    turnState.lastProductResults = result.products;
+                    (turnState as any).lastAlternativesReference = { brand: '', name: result.reference.label, ...result.reference };
+                    recordDiscussedProducts(state, result.products, 'search');
+                    return {
+                        reference: result.reference,
+                        unpricedMatches: (result.unpricedMatches || []).map((p: any) => ({ id: p.id, brand: p.brand, name: p.name, sharedActives: p.sharedActives })),
+                        countryRelaxed: result.countryRelaxed,
+                        note: result.note,
+                        dupes: result.products.map((p: any) => ({
+                            id: p.id, brand: p.brand, name: p.name,
+                            price: `${p.price} ${p.currency}`,
+                            sharedActives: p.sharedActives,
+                            missingActives: p.missingActives,
+                            matchRatio: p.matchRatio,
+                            priceSavingPct: p.priceSavingPct,
+                        })),
+                    };
+                } catch (err: any) {
+                    console.error('[AGENT TOOL] find_actives_dupe error:', err.message);
+                    return { error: `Dupe search failed: ${err.message}` };
+                }
+            }
+        }),
+
+        generate_usage_schedule: tool({
+            description: 'Week-by-week induction calendar for starting a potent active safely (retinol, glycolic/salicylic acid, benzoyl peroxide, azelaic acid, vitamin C): frequency ramp, sandwich method, rules, stop-signs. Use for "how do I start using X without burning my face?".',
+            inputSchema: z.object({
+                active: z.string().describe('The active with its strength if known: "Retinol 0.5%", "glycolic acid 7%", "ساليسيليك 2%".'),
+                concentration: z.number().optional().describe('Strength in % if stated.'),
+                sensitivity: z.enum(['beginner', 'normal', 'experienced']).optional().describe('Experience/tolerance; default beginner.'),
+            }),
+            execute: async (args: any) => {
+                console.log('[AGENT TOOL] Executing generate_usage_schedule with args:', args);
+                try {
+                    const sensitive = /حساس|sensitive|sensible/i.test(state.profile.skinType || '') || (state.profile as any).lifeStage === 'teen';
+                    const result: any = generateUsageSchedule({ ...args, skin_sensitive: sensitive });
+                    if (result.error) return { error: result.error };
+                    state.lastUsageSchedule = result;
+                    turnState.lastUsageSchedule = result;
+                    return result;
+                } catch (err: any) {
+                    console.error('[AGENT TOOL] generate_usage_schedule error:', err.message);
+                    return { error: `Schedule generation failed: ${err.message}` };
                 }
             }
         }),
@@ -1768,7 +2266,7 @@ function formatFinalResponse(userMessage: string, assistantText: string, state: 
     // but BOTH cards ship in `sections`.
     const isCompoundBrandCategory = isBrandIntent && !!detectCategoryInText(normalizedMessage);
 
-    const message = assistantText || "Here is what I found based on your request and Wathiq's cosmetic catalog.";
+    const responseText = String(assistantText || '').trim();
 
     // Build every section the tools actually produced this turn — a single user
     // message can legitimately trigger more than one tool (e.g. "search cheap
@@ -1810,6 +2308,23 @@ function formatFinalResponse(userMessage: string, assistantText: string, state: 
     if (state.lastCompatibility) {
         sections.push({ type: 'compatibility', compatibility: state.lastCompatibility });
     }
+    if (state.lastUsageSchedule) {
+        sections.push({ type: 'usage_schedule', schedule: state.lastUsageSchedule });
+    }
+    if ((state as any).lastCabinet) {
+        sections.push({ type: 'cabinet', cabinet: (state as any).lastCabinet });
+    }
+    if ((state as any).lastTriage) {
+        sections.push({ type: 'reaction_triage', triage: (state as any).lastTriage });
+    }
+    if ((state as any).lastExplanation) sections.push({ type: 'pick_explanation', explanation: (state as any).lastExplanation });
+    if ((state as any).lastRoutineDiff) sections.push({ type: 'routine_diff', diff: (state as any).lastRoutineDiff });
+    if ((state as any).lastShare) sections.push({ type: 'share', share: (state as any).lastShare });
+    if ((state as any).lastShoppingList) sections.push({ type: 'shopping_list', shoppingList: (state as any).lastShoppingList });
+    if ((state as any).lastGift) sections.push({ type: 'gift_set', gift: (state as any).lastGift });
+    if (state.lastLabelScan) {
+        sections.push({ type: 'label_scan', scan: state.lastLabelScan });
+    }
     if ((state as any).lastBrandReviews) {
         sections.push({ type: 'brand_reviews', brandReviews: (state as any).lastBrandReviews });
     }
@@ -1819,7 +2334,14 @@ function formatFinalResponse(userMessage: string, assistantText: string, state: 
         sections.push({ type: 'community_reviews', ...(state as any).lastReviewData });
     }
     if (sections.length === 0) {
-        return { type: 'assistant_message', message, sections: [] };
+        const emptyMessage = Array.isArray(state.lastProductResults)
+            ? 'لم أجد منتجات مطابقة لهذه الشروط في الكتالوج. جرّب توسيع البحث أو تخفيف أحد الشروط.'
+            : 'تعذّر إكمال الرد هذه المرة. يرجى إعادة المحاولة.';
+        return {
+            type: 'assistant_message',
+            message: responseText || emptyMessage,
+            sections: [],
+        };
     }
 
     // Pick the "primary" section for old clients that only read top-level fields
@@ -1845,6 +2367,8 @@ function formatFinalResponse(userMessage: string, assistantText: string, state: 
     } else {
         primary = sections.find(s => s.type === 'routine')
             || sections.find(s => s.type === 'compatibility')
+            || sections.find(s => s.type === 'reaction_triage')
+            || sections.find(s => s.type === 'usage_schedule')
             || sections.find(s => s.type === 'ingredient_presence')
             || sections.find(s => s.type === 'comparison')
             || sections.find(s => s.type === 'brand_evaluation')
@@ -1859,7 +2383,7 @@ function formatFinalResponse(userMessage: string, assistantText: string, state: 
 
     return {
         ...primary,
-        message,
+        message: responseText || 'أعددت النتائج في البطاقة أدناه.',
         sections
     };
 }
@@ -1905,10 +2429,27 @@ function beginTurn(request: ChatRequest): { sessionId: string; state: SessionSta
     state.turnCount++;
     try { reloadLearnedAliasesIfChanged(); } catch { /* non-fatal: keep serving the old aliases */ }
 
+    // Cabinet owner (in-memory only; the id itself is never persisted by the session).
+    state.userId = isValidUserId(request.userId) ? request.userId : undefined;
+    state.authenticated = !!(request.authenticated && state.userId);
+
+    // SIGNED-IN: the app profile (Firestore, cached in RAM by the auth layer) is the baseline.
+    if (state.authenticated) {
+        try {
+            const uctx = getUserContext(state.userId);
+            if (uctx) applyUserContext(state, uctx);
+            const prefs = getUserPrefs(state.userId!);
+            if (prefs.register && !state.profile.register) state.profile.register = prefs.register;
+            if (prefs.climateZone && !state.profile.climateZone) { state.profile.climateZone = prefs.climateZone as any; state.profile.city = state.profile.city || prefs.city; }
+        } catch (e: any) { console.warn('[AUTH] applying user context failed (non-fatal):', e.message); }
+    }
+
     // OPT-IN long-term memory: needs server flag + explicit per-request consent.
     // Loaded BEFORE the profile is updated so what the user says now wins.
     try {
-        if (request.userId && FORGET_RE.test(request.message)) {
+        if (state.authenticated) {
+            // Firestore is the durable source for signed-in users; opt-in long-term memory is not used.
+        } else if (request.userId && FORGET_RE.test(request.message)) {
             forgetUser(request.userId);
             state.longtermForgotTurn = state.turnCount;
             state.returningFacts = null;
@@ -1926,11 +2467,47 @@ function beginTurn(request: ChatRequest): { sessionId: string; state: SessionSta
         console.warn('[LONGTERM] load failed (non-fatal):', e.message);
     }
     try {
+        // Sticky Arabic register: Darija markers switch it on; a long clean-MSA message switches it off.
+        if (/[\u0600-\u06FF]|[a-z]/i.test(request.message)) {
+            const v = detectVoice(request.message, state.profile);
+            if (v.lang === 'ar' && hasDarijaMarkers(request.message)) state.profile.register = 'darija';
+            else if (v.lang === 'ar' && v.register === 'msa' && /[\u0600-\u06FF]/.test(request.message) && request.message.trim().split(/\s+/).length >= 6) state.profile.register = 'msa';
+        }
+    } catch { /* non-fatal */ }
+    try {
+        // Life stage (pregnancy/breastfeeding → retinoids excluded everywhere; teen → gentler guidance)
+        applyLifeStage(state.profile as any, detectLifeStage(request.message));
+    } catch { /* non-fatal */ }
+    try {
+        const climate = detectClimate(request.message);
+        if (climate) { state.profile.city = climate.city; state.profile.climateZone = climate.zone; }
+    } catch { /* non-fatal */ }
+    try {
         updateProfileFromMessage(state, request.message);
     } catch (e: any) {
         console.warn('[SESSION] profile extraction failed (non-fatal):', e.message);
     }
     return { sessionId, state };
+}
+
+// ─── TAP-TO-ANSWER CHIPS ──────────────────────────────────────────────────────
+/** Adds `quickReplies` (buttons that send a ready-made message) to a final response. Never throws. */
+function attachQuickReplies(resp: any, request: ChatRequest, state: SessionState) {
+    try {
+        const v = detectVoice(request.message, state.profile);
+        const pending = !!(state.pendingOffer && state.pendingOffer.turn === state.turnCount);
+        const qr = suggestQuickReplies({
+            replyText: String(resp?.message || ''), lang: v.tlang, pendingOfferActive: pending,
+            hasRoutine: !!state.lastRoutine, hasSkinType: !!state.profile.skinType,
+            sectionTypes: (resp?.sections || []).map((x: any) => x.type),
+        });
+        if (qr.length) resp.quickReplies = qr;
+        // Attribution id for 👍/👎 (see /api/feedback): remembers which lane/tools produced this reply.
+        const messageId = newMessageId();
+        resp.messageId = messageId;
+        registerMessage(messageId, { lane: resp.lane, tools: (resp.sections || []).map((x: any) => x.type) });
+    } catch { /* non-fatal */ }
+    return resp;
 }
 
 // ─── END-OF-TURN BOOKKEEPING ──────────────────────────────────────────────────
@@ -1939,8 +2516,12 @@ function finalizeTurn(request: ChatRequest, state: SessionState, turnState: Agen
     try { updateMissionAfterTurn(state, request.message, turnState); } catch (e: any) {
         console.warn('[MISSION] update failed (non-fatal):', e.message);
     }
+    if (state.authenticated && state.userId) {
+        // signed-in: remember only agent-side preferences (never written to the app's Firestore)
+        saveUserPrefs(state.userId, { register: state.profile.register, city: state.profile.city, climateZone: state.profile.climateZone });
+    }
     try {
-        if (LONGTERM_ENABLED && request.rememberMe === true && request.userId && state.longtermForgotTurn !== state.turnCount) {
+        if (!state.authenticated && LONGTERM_ENABLED && request.rememberMe === true && request.userId && state.longtermForgotTurn !== state.turnCount) {
             saveFacts(request.userId, extractDurableFacts(state.profile));
         }
     } catch { /* non-fatal */ }
@@ -1984,10 +2565,53 @@ const STATUS_BY_TOOL: Record<string, string> = {
     find_alternatives: '🔁 جاري البحث عن بدائل تشاركه المكونات الفعالة...',
     check_compatibility: '🧬 جاري فحص توافق المكونات...',
     modify_routine: '✏️ جاري تعديل الروتين...',
+    find_actives_dupe: '🧬 جاري البحث عن بدائل محلية تشاركه المكونات الفعالة...',
+    generate_usage_schedule: '🗓️ جاري إعداد جدول التدرج الآمن...',
+    manage_cabinet: '🗄️ جاري تحديث خزانتك...',
+    triage_reaction: '🩺 جاري تحليل ما تعانيه بشرتك...',
+    routine_versions: '🕘 جاري استرجاع نسخ الروتين...',
+    explain_pick: '🔎 جاري تحليل سبب الاختيار...',
+    share_routine: '📤 جاري تجهيز الروتين للمشاركة...',
+    build_shopping_list: '🛒 جاري إعداد قائمة التسوق...',
+    build_gift_set: '🎁 جاري تكوين مجموعة الهدية...',
     suggest_learning: '💡 جاري تسجيل المعلومة الجديدة للتدقيق...',
 };
 
-const FIRST_TOKEN_TIMEOUT_MS = parseInt(process.env.AGENT_FIRST_TOKEN_TIMEOUT_MS || '9000', 10);
+const FIRST_TOKEN_TIMEOUT_MS = Math.max(1000, parseInt(process.env.AGENT_FIRST_TOKEN_TIMEOUT_MS || '5000', 10) || 5000);
+// A blank model stream is not success. Try one alternate key by default, then
+// return a visible error instead of leaving the chat with an empty assistant turn.
+const MAX_EMPTY_STREAM_ATTEMPTS = Math.max(1, parseInt(process.env.AGENT_EMPTY_STREAM_ATTEMPTS || '2', 10) || 2);
+
+// Tool logs aid debugging without dumping user profiles, raw ingredients,
+// notes, image payloads, credentials, or identity fields into log files.
+const PRIVATE_TOOL_ARG_KEY = /(?:skin|hair|scalp|allerg|ingredient|profile|user.?id|uid|email|token|password|note|reason|message|conversation|image|recipient)/i;
+
+function sanitizeToolLogArgs(value: any, key = '', depth = 0): any {
+    if (PRIVATE_TOOL_ARG_KEY.test(key)) return '[REDACTED]';
+    if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+    if (typeof value === 'string') return value.replace(/[\r\n\t]+/g, ' ').slice(0, 160);
+    if (depth >= 3) return Array.isArray(value) ? `[array:${value.length}]` : '[object]';
+    if (Array.isArray(value)) return value.slice(0, 10).map(item => sanitizeToolLogArgs(item, '', depth + 1));
+    if (typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).slice(0, 30).map(([childKey, childValue]) => [
+            childKey, sanitizeToolLogArgs(childValue, childKey, depth + 1),
+        ]));
+    }
+    return `[${typeof value}]`;
+}
+
+function summarizeToolLogResult(value: any): Record<string, any> {
+    if (Array.isArray(value)) return { type: 'array', count: value.length };
+    if (!value || typeof value !== 'object') return { type: typeof value };
+    const summary: Record<string, any> = { keys: Object.keys(value).slice(0, 24) };
+    for (const key of ['products', 'items', 'steps', 'entries', 'candidates', 'sections']) {
+        if (Array.isArray(value[key])) summary[`${key}Count`] = value[key].length;
+    }
+    if (typeof value.foundCount === 'number') summary.foundCount = value.foundCount;
+    if (typeof value.returnedCount === 'number') summary.returnedCount = value.returnedCount;
+    if (typeof value.error === 'string') summary.error = value.error.slice(0, 120);
+    return summary;
+}
 
 /**
  * Safety gate for the fast lane: if the message hits a hard safety trigger
@@ -2029,39 +2653,67 @@ export async function streamChat(
         callbacks.onTextDelta?.(delta);
     };
 
-    // Run router first (0.1ms) and give instant feedback.
+    // The status at this point is only a router hint, not a confirmed tool call.
+    // Emit a neutral status until the fast lane starts a tool or the model emits tool-call.
+    const routerStartedAt = nowMs();
     const quickIntent = classifyIntent(request.message, state);
+    const routerDurationMs = nowMs() - routerStartedAt;
     const firstTool = quickIntent.likelyTools[0];
-    callbacks.onStatus?.(STATUS_BY_TOOL[firstTool] || '🧠 جاري تحليل طلبك...');
+    if (isDebugEnabled()) logReq(reqId, 'TIMING', `INTENT_ROUTER duration=${routerDurationMs}ms tool=${firstTool || 'none'} confidence=${quickIntent.confidence} compound=${Boolean(quickIntent.compound)}`);
+    callbacks.onStatus?.('🧠 جاري فهم طلبك وتجهيز المسار المناسب...');
 
     const tools = createAgentTools(state, turnState, request.message, sessionId);
 
+    // ─── SCAN LANE: a photo of a shelf label / pack ───────────────────────────
+    if (request.images && request.images.length > 0) {
+        const scan = await tryScanLane({
+            message: request.message, images: request.images, state, turnState, tools,
+            parser: parseContributionImages as any,
+            emitCard, emitText, emitStatus: callbacks.onStatus,
+        });
+        if (scan) {
+            sessionMemory.touch(sessionId);
+            finalizeTurn(request, state, turnState);
+            if (isDebugEnabled()) logReq(reqId, 'TIMING', `SCAN LANE (${scan.tool}) total=${nowMs() - t0}ms`);
+            return attachQuickReplies({ ...formatFinalResponse(request.message, scan.text, turnState), sessionId, lane: 'scan' }, request, state);
+        }
+    }
+
     // ─── FAST LANE ───────────────────────────────────────────────────────────
-    if (FAST_LANE_ENABLED && !externalSignal?.aborted && state.longtermForgotTurn !== state.turnCount && !(await hasSafetyTrigger(request.message))) {
-        try {
-            const fast = await tryFastLane({
-                message: request.message,
-                state, turnState, tools,
-                intent: quickIntent as any,
-                emitCard, emitText,
-                emitStatus: callbacks.onStatus,
-            });
-            if (fast) {
-                sessionMemory.touch(sessionId);
-                finalizeTurn(request, state, turnState);
-                if (isDebugEnabled()) {
-                    logReq(reqId, 'TIMING', `FAST LANE (${fast.tool}) total=${nowMs() - t0}ms firstCard=${firstCardMs}ms firstText=${firstTextMs}ms`);
+    if (FAST_LANE_ENABLED && !externalSignal?.aborted && state.longtermForgotTurn !== state.turnCount) {
+        const safetyStartedAt = nowMs();
+        const safetyMatched = await hasSafetyTrigger(request.message);
+        if (isDebugEnabled()) logReq(reqId, 'TIMING', `SAFETY_GATE duration=${nowMs() - safetyStartedAt}ms matched=${safetyMatched}`);
+        if (!safetyMatched && !externalSignal?.aborted) {
+            const fastStartedAt = nowMs();
+            try {
+                const fast = await tryFastLane({
+                    message: request.message,
+                    state, turnState, tools,
+                    intent: quickIntent as any,
+                    emitCard, emitText,
+                    emitStatus: callbacks.onStatus,
+                });
+                if (isDebugEnabled()) logReq(reqId, 'TIMING', `FAST_LANE_DISPATCH duration=${nowMs() - fastStartedAt}ms result=${fast ? fast.tool : 'fallback-to-llm'}`);
+                if (fast) {
+                    sessionMemory.touch(sessionId);
+                    finalizeTurn(request, state, turnState);
+                    if (isDebugEnabled()) logReq(reqId, 'TIMING', `FAST LANE (${fast.tool}) total=${nowMs() - t0}ms firstCard=${firstCardMs}ms firstText=${firstTextMs}ms modelCalls=0`);
+                    return attachQuickReplies({ ...formatFinalResponse(request.message, fast.text, turnState), sessionId, lane: 'fast' }, request, state);
                 }
-                return { ...formatFinalResponse(request.message, fast.text, turnState), sessionId, lane: 'fast' };
+            } catch (e: any) {
+                console.warn('[AGENT] fast lane failed, using LLM path:', e?.message);
+                resetTurnState(turnState);
             }
-        } catch (e: any) {
-            console.warn('[AGENT] fast lane failed, using LLM path:', e?.message);
-            resetTurnState(turnState);
+        } else if (isDebugEnabled()) {
+            logReq(reqId, 'FAST_LANE', safetyMatched ? 'bypassed by safety trigger' : 'bypassed because client disconnected');
         }
     }
 
     // ─── LLM PATH ────────────────────────────────────────────────────────────
+    const contextStartedAt = nowMs();
     const messages = await buildModelMessages(request, state);
+    if (isDebugEnabled()) logReq(reqId, 'TIMING', `MODEL_CONTEXT duration=${nowMs() - contextStartedAt}ms historyMessages=${messages.length} lastUserChars=${messages[messages.length - 1]?.content?.length || 0}`);
     const maxOutputTokens = pickMaxOutputTokens(request.message);
 
     const isGemini = !request.provider || request.provider === 'gemini' || (request.provider as string) === 'google';
@@ -2070,22 +2722,28 @@ export async function streamChat(
     let fullText = '';
     let lastError: any = null;
     let clientGone = false;
+    const activeToolCalls = new Map<string, { toolName: string; startedAt: number }>();
+    const calledTools = new Set<string>();
+    let streamFinishReason = 'unknown';
+    let firstStreamEventMs = -1;
+    let emptyStreamAttempts = 0;
 
     // ─── SEQUENTIAL KEY FAILOVER LOOP (NO BLACKLISTS) ────────────────────────
     for (let i = 0; i < keys.length; i++) {
         if (externalSignal?.aborted) { clientGone = true; break; }
         const apiKey = keys[i];
 
-        // Per-attempt abort: fires on client disconnect OR (multi-key only)
-        // when no output arrives within FIRST_TOKEN_TIMEOUT_MS, so a hung key
-        // fails over instead of stalling the turn.
+        // Per-attempt abort: fires on client disconnect OR when no useful output
+        // (text or a tool call) arrives within FIRST_TOKEN_TIMEOUT_MS. Apply it
+        // even with one key, so a silent provider cannot hold the request forever.
         const attempt = new AbortController();
         const onExternalAbort = () => attempt.abort();
         externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
         let timedOut = false;
-        let firstTokenTimer: NodeJS.Timeout | null = keys.length > 1
-            ? setTimeout(() => { timedOut = true; attempt.abort(); }, FIRST_TOKEN_TIMEOUT_MS)
-            : null;
+        let firstTokenTimer: NodeJS.Timeout | null = setTimeout(() => {
+            timedOut = true;
+            attempt.abort();
+        }, FIRST_TOKEN_TIMEOUT_MS);
         const clearFirstTokenTimer = () => { if (firstTokenTimer) { clearTimeout(firstTokenTimer); firstTokenTimer = null; } };
 
         try {
@@ -2109,25 +2767,90 @@ export async function streamChat(
             });
 
             for await (const part of stream.fullStream) {
-                if (part.type !== 'start') clearFirstTokenTimer();
-
+                if (firstStreamEventMs < 0) firstStreamEventMs = nowMs() - t0;
                 if (part.type === 'tool-call') {
+                    clearFirstTokenTimer();
+                    calledTools.add(part.toolName);
+                    const toolPart = part as any;
+                    const toolCallId = String(toolPart.toolCallId || `${part.toolName}:${activeToolCalls.size + 1}`);
+                    activeToolCalls.set(toolCallId, { toolName: part.toolName, startedAt: nowMs() });
+                    logReq(reqId, 'TOOL', `${part.toolName} call`, {
+                        toolCallId,
+                        args: sanitizeToolLogArgs(toolPart.input ?? toolPart.args ?? toolPart.arguments ?? {}),
+                    });
                     const status = STATUS_BY_TOOL[part.toolName];
                     if (status) callbacks.onStatus?.(status);
                 } else if (part.type === 'tool-result') {
+                    clearFirstTokenTimer();
+                    const toolPart = part as any;
+                    const toolCallId = String(toolPart.toolCallId || '');
+                    const active = activeToolCalls.get(toolCallId);
+                    const toolName = toolPart.toolName || active?.toolName || 'unknown_tool';
+                    logReq(reqId, 'TOOL', `${toolName} result`, {
+                        ...(toolCallId ? { toolCallId } : {}),
+                        ...(active ? { durationMs: nowMs() - active.startedAt } : {}),
+                        result: summarizeToolLogResult(toolPart.output ?? toolPart.result),
+                    });
+                    if (toolCallId) activeToolCalls.delete(toolCallId);
                     callbacks.onStatus?.('✨ جاري صياغة التقييم والنتيجة...');
-                    emitCardForTool(part.toolName, turnState, emitCard);
+                    emitCardForTool(toolName, turnState, emitCard);
+                } else if (part.type === 'tool-error') {
+                    clearFirstTokenTimer();
+                    const toolPart = part as any;
+                    const toolCallId = String(toolPart.toolCallId || '');
+                    const active = activeToolCalls.get(toolCallId);
+                    logReq(reqId, 'TOOL', `${toolPart.toolName || active?.toolName || 'unknown_tool'} error`, {
+                        ...(toolCallId ? { toolCallId } : {}),
+                        ...(active ? { durationMs: nowMs() - active.startedAt } : {}),
+                        errorName: toolPart.error?.name || 'ToolError',
+                    });
+                    if (toolCallId) activeToolCalls.delete(toolCallId);
                 } else if (part.type === 'text-delta') {
                     const delta = (part as any).textDelta || (part as any).text;
                     if (delta) {
+                        clearFirstTokenTimer();
                         fullText += delta;
                         emitText(delta);
                     }
+                } else if (part.type === 'finish-step' || part.type === 'finish') {
+                    streamFinishReason = String((part as any).finishReason || streamFinishReason);
                 }
             }
 
-            // Stream completed without error — exit loop!
+            // An AbortSignal may make the SDK end fullStream normally rather
+            // than throw. Do NOT treat that as success if the model produced no
+            // text and never selected a tool (the exact failure seen in logs).
+            // Retry on one alternate key, bounded by MAX_EMPTY_STREAM_ATTEMPTS.
+            if (!fullText.trim() && calledTools.size === 0) {
+                emptyStreamAttempts += 1;
+                lastError = new Error(timedOut ? 'first useful output timeout' : 'empty model stream');
+                logReq(reqId, 'LLM_STREAM', 'attempt produced no usable output', {
+                    attempt: `${i + 1}/${keys.length}`,
+                    timedOut,
+                    timeoutMs: FIRST_TOKEN_TIMEOUT_MS,
+                    finishReason: streamFinishReason,
+                    firstStreamEventMs,
+                    emptyStreamAttempts,
+                    maxEmptyStreamAttempts: MAX_EMPTY_STREAM_ATTEMPTS,
+                });
+                if (i < keys.length - 1 && emptyStreamAttempts < MAX_EMPTY_STREAM_ATTEMPTS) {
+                    callbacks.onStatus?.('🧠 تعذّر الحصول على رد، أعيد المحاولة...');
+                    continue;
+                }
+                break;
+            }
+
+            // At least text or a tool call was produced; this attempt is useful.
             lastError = null;
+            logReq(reqId, 'LLM_STREAM', 'attempt completed', {
+                attempt: `${i + 1}/${keys.length}`,
+                finishReason: streamFinishReason,
+                toolCalls: Array.from(calledTools),
+                textLength: fullText.length,
+                firstStreamEventMs,
+                firstTextMs,
+                firstCardMs,
+            });
             break;
 
         } catch (streamErr: any) {
@@ -2140,8 +2863,23 @@ export async function streamChat(
             }
             console.warn(`[AGENT] ⚠️ Key [${i + 1}/${keys.length}] failed (${timedOut ? 'first-token timeout' : (streamErr?.statusCode || streamErr?.message)}).`);
 
-            // If tokens were already sent to the user's screen, do not restart mid-sentence
+            // If tokens were already sent to the user's screen, do not restart mid-sentence.
             if (fullText.length > 0) break;
+
+            // Timeouts can throw in some SDK/provider combinations and end the
+            // iterator normally in others. Bound both behaviours the same way.
+            if (timedOut) {
+                emptyStreamAttempts += 1;
+                logReq(reqId, 'LLM_STREAM', 'attempt timed out before usable output', {
+                    attempt: `${i + 1}/${keys.length}`,
+                    timeoutMs: FIRST_TOKEN_TIMEOUT_MS,
+                    emptyStreamAttempts,
+                    maxEmptyStreamAttempts: MAX_EMPTY_STREAM_ATTEMPTS,
+                });
+                if (i >= keys.length - 1 || emptyStreamAttempts >= MAX_EMPTY_STREAM_ATTEMPTS) break;
+                callbacks.onStatus?.('🧠 تعذّر الحصول على رد، أعيد المحاولة...');
+                continue;
+            }
 
             if (i < keys.length - 1) {
                 console.log(`[AGENT] 🔄 Switching to next API key in GEMINI_API_KEYS...`);
@@ -2153,16 +2891,22 @@ export async function streamChat(
     }
 
     if (lastError && !fullText) {
-        console.error('[AGENT] Stream aborted mid-turn (all keys exhausted):', lastError.message || lastError);
-        fullText = 'حدث خطأ أثناء معالجة الطلب. هل يمكنك إعادة صياغة سؤالك؟';
+        console.error('[AGENT] No usable model output after bounded attempts:', lastError.message || lastError);
+        fullText = 'تعذّر على وثيق إكمال الرد هذه المرة. حاول مجددًا بعد قليل.';
+    } else if (!fullText.trim() && !clientGone) {
+        logReq(reqId, 'LLM_STREAM', 'completed with no text', {
+            finishReason: streamFinishReason,
+            toolCalls: Array.from(calledTools),
+            hasCardData: Boolean(turnState.lastProductResults?.length || turnState.lastProduct || turnState.lastAnalysis || turnState.lastRoutine),
+        });
     }
 
     sessionMemory.touch(sessionId);
     finalizeTurn(request, state, turnState);
     if (isDebugEnabled()) {
-        logReq(reqId, 'TIMING', `LLM PATH total=${nowMs() - t0}ms firstCard=${firstCardMs}ms firstText=${firstTextMs}ms${clientGone ? ' (client disconnected)' : ''}`);
+        logReq(reqId, 'TIMING', `LLM PATH total=${nowMs() - t0}ms firstStreamEvent=${firstStreamEventMs}ms firstCard=${firstCardMs}ms firstText=${firstTextMs}ms${clientGone ? ' (client disconnected)' : ''}`);
     }
-    return { ...formatFinalResponse(request.message, fullText, turnState), sessionId, lane: 'llm' };
+    return attachQuickReplies({ ...formatFinalResponse(request.message, fullText, turnState), sessionId, lane: 'llm' }, request, state);
 }
 
 /**
@@ -2176,6 +2920,19 @@ export async function processChat(request: ChatRequest) {
 
     const tools = createAgentTools(state, turnState, request.message, sessionId);
 
+    if (request.images && request.images.length > 0) {
+        const scan = await tryScanLane({
+            message: request.message, images: request.images, state, turnState, tools,
+            parser: parseContributionImages as any,
+        });
+        if (scan) {
+            sessionMemory.touch(sessionId);
+            finalizeTurn(request, state, turnState);
+            if (isDebugEnabled()) logReq(reqId, 'TIMING', `SCAN LANE (${scan.tool}) total=${nowMs() - t0}ms`);
+            return attachQuickReplies({ ...formatFinalResponse(request.message, scan.text, turnState), sessionId, lane: 'scan' }, request, state);
+        }
+    }
+
     // Fast lane works for the JSON endpoint too (no callbacks needed).
     if (FAST_LANE_ENABLED && state.longtermForgotTurn !== state.turnCount && !(await hasSafetyTrigger(request.message))) {
         try {
@@ -2185,7 +2942,7 @@ export async function processChat(request: ChatRequest) {
                 sessionMemory.touch(sessionId);
                 finalizeTurn(request, state, turnState);
                 if (isDebugEnabled()) logReq(reqId, 'TIMING', `FAST LANE (${fast.tool}) total=${nowMs() - t0}ms`);
-                return { ...formatFinalResponse(request.message, fast.text, turnState), sessionId, lane: 'fast' };
+                return attachQuickReplies({ ...formatFinalResponse(request.message, fast.text, turnState), sessionId, lane: 'fast' }, request, state);
             }
         } catch (e: any) {
             console.warn('[AGENT] fast lane failed, using LLM path:', e?.message);
@@ -2216,5 +2973,5 @@ export async function processChat(request: ChatRequest) {
     sessionMemory.touch(sessionId);
     finalizeTurn(request, state, turnState);
     if (isDebugEnabled()) logReq(reqId, 'TIMING', `LLM PATH total=${nowMs() - t0}ms`);
-    return { ...formatFinalResponse(request.message, text, turnState), sessionId, lane: 'llm' };
+    return attachQuickReplies({ ...formatFinalResponse(request.message, text, turnState), sessionId, lane: 'llm' }, request, state);
 }

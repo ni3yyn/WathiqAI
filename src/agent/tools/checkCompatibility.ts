@@ -9,13 +9,15 @@
 import { getProduct } from './getProduct';
 import {
     CONCEPTS, getConcept, detectConcepts, resolveAllConcepts, findRule,
-    placementOf, PHOTOSENSITIZING, PREGNANCY_NOTE, L10n, Placement, Severity,
+    placementOf, PHOTOSENSITIZING, PREGNANCY_NOTE, STRONG_ACTIVES, BUFFERING_TIP, L10n, Placement, Severity,
 } from '../ingredientKnowledge';
 
 export interface CheckCompatibilityArgs {
     productIds?: string[];
     /** Free-text actives, any language: ["ريتينول", "vitamin c"] or "retinol with aha". */
     actives?: string[];
+    /** Items without a catalog id (cabinet entries added by scan/manually): label + INCI list. */
+    extraItems?: Array<{ label: string; ingredients: string[] }>;
 }
 
 interface Item {
@@ -26,7 +28,7 @@ interface Item {
 
 // concepts that participate in rules or placement
 const RELEVANT_KEYS = Array.from(new Set([
-    'retinoid', 'vitc', 'aha', 'bha', 'pha', 'benzoyl', 'niacinamide', 'uv_filter',
+    'retinoid', 'vitc', 'aha', 'bha', 'pha', 'benzoyl', 'niacinamide', 'uv_filter', 'copper_peptide',
     ...CONCEPTS.filter(c => ['retinoid', 'vitc', 'aha', 'bha', 'benzoyl', 'uv_filter'].includes(c.key)).map(c => c.key),
 ]));
 
@@ -56,6 +58,11 @@ export async function checkCompatibility(args: CheckCompatibilityArgs) {
             productId: r.product.id,
         });
     });
+
+    for (const x of (args.extraItems || []).slice(0, 12)) {
+        const found = detectConcepts(x.ingredients || [], RELEVANT_KEYS);
+        items.push({ label: x.label, keys: [...found.keys()] });
+    }
 
     // 2. Free-text actives → one virtual item per recognized concept
     const seen = new Set<string>();
@@ -130,6 +137,8 @@ export async function checkCompatibility(args: CheckCompatibilityArgs) {
         placement: plan,
         needsSunscreen,
         pregnancyNote: allKeys.has('retinoid') ? PREGNANCY_NOTE : undefined,
+        // Layering advice: strong actives are better tolerated when buffered.
+        bufferingTip: STRONG_ACTIVES.some(k => allKeys.has(k)) ? BUFFERING_TIP : undefined,
         unresolved: unresolved.length ? unresolved : undefined,
         disclaimer: 'إرشاد عام وليس بديلاً عن استشارة طبيب الجلدية، خصوصاً مع البشرة الحساسة أو الحمل.',
     };

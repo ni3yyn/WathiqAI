@@ -12,7 +12,8 @@ export type KnowledgeCategory =
     | 'ingredient_interaction' // Clashes: Retinol + AHA/BHA, Vit C + Niacinamide
     | 'climate_storage'        // Summer heat, light, oxidation
     | 'routine_guideline'      // Application order, timing
-    | 'brand_market_intel';    // Local market formulations, verified dupes
+    | 'brand_market_intel'    // Local market formulations, verified dupes
+    | 'community_knowledge';   // Learned from users (judged + supported/reviewed) — lowest priority
 
 export interface KnowledgeItem {
     id: string;
@@ -22,6 +23,9 @@ export interface KnowledgeItem {
     triggers?: string[];       // Hard keyword triggers that bypass vector threshold
     vector?: number[];
     updatedAt: string;
+    /** 'user_taught' = learned from users (see learning.ts); absent = curated */
+    source?: 'user_taught';
+    supports?: number;
 }
 
 // ─── KNOWLEDGE FILE CACHE (mtime-keyed) ──────────────────────────────────────
@@ -191,7 +195,8 @@ export async function findRelevantKnowledge(
 
                 // DYNAMIC THRESHOLD:
                 // Safety items use 0.70 to easily catch slang/typos. General advice uses 0.76.
-                const threshold = item.category === 'safety_contraindication' ? 0.70 : 0.76;
+                // Community-taught facts need a closer match (less noise); curated ones keep their thresholds.
+                const threshold = item.category === 'safety_contraindication' ? 0.70 : item.source === 'user_taught' ? 0.80 : 0.76;
 
                 if (sim >= threshold) {
                     matchedFacts.push({ item, score: sim, reason: `Cohere match (${(sim * 100).toFixed(1)}%)` });
@@ -211,9 +216,12 @@ export async function findRelevantKnowledge(
         if (matchedFacts.length === 0) return null;
 
         // 3. SORT BY PRIORITY (Medical rules ALWAYS come before storage rules!)
+        // `?? 30`: entries written by the old worker had no priority → NaN comparisons
+        // made the order unstable. Missing priority now ranks as community-level (30).
+        const pri = (x: KnowledgeItem) => (typeof x.priority === 'number' ? x.priority : 30);
         matchedFacts.sort((a, b) => {
-            if (b.item.priority !== a.item.priority) {
-                return b.item.priority - a.item.priority;
+            if (pri(b.item) !== pri(a.item)) {
+                return pri(b.item) - pri(a.item);
             }
             return b.score - a.score;
         });
@@ -230,7 +238,9 @@ export async function findRelevantKnowledge(
         console.log(`[KNOWLEDGE] 🧠 Injected ${finalPicks.length} verified facts for query:`);
         finalPicks.forEach(p => console.log(`            ↳ [${p.item.category} | Pri:${p.item.priority}] ${p.reason}: "${p.item.text.slice(0, 45)}..."`));
 
-        return finalPicks.map(p => `• [${p.item.category.toUpperCase()}]: ${p.item.text}`).join('\n');
+        return finalPicks.map(p => p.item.source === 'user_taught'
+            ? `• [COMMUNITY — reported by users, not clinically verified; hedge accordingly]: ${p.item.text}`
+            : `• [${p.item.category.toUpperCase()}]: ${p.item.text}`).join('\n');
 
     } catch (err: any) {
         console.error('[KNOWLEDGE] Retrieval error:', err.message);

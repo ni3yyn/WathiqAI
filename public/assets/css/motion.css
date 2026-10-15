@@ -1,0 +1,417 @@
+        /* Animations */
+        @keyframes wordReveal {
+            0% { opacity: 0; transform: translateY(4px); filter: blur(1.5px); }
+            100% { opacity: 1; transform: translateY(0); filter: blur(0); }
+        }
+        @keyframes cardReveal {
+            0%   { opacity: 0; transform: translateY(14px) scale(0.965); filter: blur(4px); }
+            60%  { filter: blur(0.4px); }
+            100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+        }
+        @keyframes sectionFade {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        @keyframes railItemReveal {
+            0%   { opacity: 0; transform: translateX(18px) translateY(8px) scale(0.96); filter: blur(3px); }
+            100% { opacity: 1; transform: translateX(0) translateY(0) scale(1); filter: blur(0); }
+        }
+
+        .reveal-word { display: inline; opacity: 0; animation: wordReveal 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+        .reveal-block { opacity: 0; animation: wordReveal 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+        .reveal-card-block {
+            opacity: 0;
+            animation: cardReveal 0.85s cubic-bezier(0.16, 0.84, 0.24, 1) forwards;
+            will-change: opacity, transform, filter;
+        }
+        .reveal-card-item {
+            opacity: 0;
+            animation: railItemReveal 0.75s cubic-bezier(0.16, 0.84, 0.24, 1) forwards;
+            will-change: opacity, transform, filter;
+        }
+
+        .thinking-dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: #558f62;
+            animation: dotBounce 1.4s infinite ease-in-out both;
+        }
+        .thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+        .thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+        .thinking-dot:nth-child(3) { animation-delay: 0s; }
+
+        /* SKELETON PLACEHOLDER STYLES */
+        @keyframes skeletonShimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .skeleton-shimmer {
+            background: linear-gradient(90deg, rgba(232, 241, 233, 0.45) 20%, rgba(255, 255, 255, 0.9) 50%, rgba(232, 241, 233, 0.45) 80%);
+            background-size: 250% 100%;
+            animation: skeletonShimmer 1.8s infinite ease-in-out;
+            border-radius: 0.6rem;
+        }
+        .skeleton-card {
+            background: rgba(255, 255, 255, 0.65);
+            border-radius: 1rem;
+            padding: 0.85rem;
+            box-shadow: 0 1px 3px rgba(45, 60, 48, 0.04);
+        }
+        /* Reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+            .reveal-word, .reveal-block, .reveal-card-block, .reveal-card-item {
+                animation-duration: 0.01ms !important;
+                animation-delay: 0ms !important;
+                opacity: 1 !important;
+                transform: none !important;
+                filter: none !important;
+            }
+        }
+        /* ═══════════════════════════════════════════════════════════
+           MICRO-INTERACTIONS — v4 polish layer
+           ═══════════════════════════════════════════════════════════ */
+
+        /* ── Animated SVG score ring (brand audit hero) ────────── */
+        .score-ring-wrap {
+            position: relative;
+            width: 92px;
+            height: 92px;
+            flex-shrink: 0;
+        }
+        .score-ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+        .score-ring-track { fill: none; stroke: #e2e8f0; stroke-width: 7; }
+        .score-ring-fill {
+            fill: none;
+            stroke-width: 7;
+            stroke-linecap: round;
+            stroke-dasharray: var(--ring-circ, 251.33);
+            stroke-dashoffset: var(--ring-circ, 251.33);
+            transition: stroke-dashoffset 1.4s cubic-bezier(0.16, 0.84, 0.24, 1);
+            filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.08));
+        }
+        .score-ring-wrap.ring-animated .score-ring-fill {
+            stroke-dashoffset: var(--ring-offset, 0);
+        }
+        .score-ring-center {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        .score-ring-number {
+            font-size: 1.5rem;
+            font-weight: 800;
+            line-height: 1;
+            color: #0f172a;
+            letter-spacing: -0.03em;
+            font-variant-numeric: tabular-nums;
+        }
+        .score-ring-label {
+            font-size: 0.6rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #94a3b8;
+            margin-top: 2px;
+        }
+
+        /* ── Smooth grid-row accordions (no display:none jumps) ── */
+        .accordion-body {
+            display: grid;
+            grid-template-rows: 0fr;
+            padding: 0 1rem;
+            border-top: 1px solid #f1f5f9;
+            font-size: 0.9rem;
+            color: #334155;
+            line-height: 1.75;
+            overflow: hidden;
+            opacity: 0;
+            transition:
+                grid-template-rows 0.42s cubic-bezier(0.16, 0.84, 0.24, 1),
+                padding 0.42s cubic-bezier(0.16, 0.84, 0.24, 1),
+                opacity 0.3s ease;
+        }
+        .accordion-body > .accordion-body-inner {
+            min-height: 0;
+            overflow: hidden;
+        }
+        .accordion-item.open .accordion-body {
+            grid-template-rows: 1fr;
+            padding: 0.25rem 1rem 1rem;
+            opacity: 1;
+        }
+        .accordion-body .acc-detail,
+        .accordion-body .standout-row,
+        .accordion-body .acc-note,
+        .accordion-body .acc-row {
+            opacity: 0;
+            transform: translateY(6px);
+            transition:
+                opacity 0.36s cubic-bezier(0.16, 0.84, 0.24, 1),
+                transform 0.36s cubic-bezier(0.16, 0.84, 0.24, 1);
+        }
+        .accordion-item.open .accordion-body .acc-detail,
+        .accordion-item.open .accordion-body .standout-row,
+        .accordion-item.open .accordion-body .acc-note,
+        .accordion-item.open .accordion-body .acc-row {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .accordion-item.open .accordion-body .acc-row:nth-child(1) { transition-delay: 40ms; }
+        .accordion-item.open .accordion-body .acc-row:nth-child(2) { transition-delay: 70ms; }
+        .accordion-item.open .accordion-body .acc-row:nth-child(3) { transition-delay: 100ms; }
+        .accordion-item.open .accordion-body .acc-row:nth-child(4) { transition-delay: 130ms; }
+        .accordion-item.open .accordion-body .acc-row:nth-child(5) { transition-delay: 160ms; }
+        .accordion-item.open .accordion-body .acc-row:nth-child(6) { transition-delay: 190ms; }
+        .accordion-item.open .accordion-body .standout-row:nth-child(1) { transition-delay: 90ms; }
+        .accordion-item.open .accordion-body .standout-row:nth-child(2) { transition-delay: 150ms; }
+
+        /* ── Ripple on every pressable surface ─────────────────── */
+        .ripple-host { position: relative; overflow: hidden; isolation: isolate; }
+        .ripple-ink {
+            position: absolute;
+            border-radius: 50%;
+            pointer-events: none;
+            background: radial-gradient(circle, rgba(85, 143, 98, 0.35) 0%, rgba(85, 143, 98, 0) 70%);
+            transform: scale(0);
+            animation: rippleGrow 0.62s cubic-bezier(0.16, 0.84, 0.24, 1) forwards;
+            z-index: 1;
+        }
+        .ripple-ink-light {
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 70%);
+        }
+        @keyframes rippleGrow {
+            to { transform: scale(2.6); opacity: 0; }
+        }
+
+        /* ── Magnetic send button w/ pulse ring + fly-away ─────── */
+        .send-pill-btn {
+            position: relative;
+            overflow: visible !important;
+            will-change: transform;
+        }
+        .send-pill-btn::after {
+            content: '';
+            position: absolute;
+            inset: -3px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(85, 143, 98, 0.5);
+            opacity: 0;
+            transform: scale(0.9);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            pointer-events: none;
+        }
+        .send-pill-btn:hover:not(:disabled)::after {
+            opacity: 1;
+            transform: scale(1);
+            animation: pulseRing 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulseRing {
+            0%   { transform: scale(1);   opacity: 0.8; }
+            70%  { transform: scale(1.35); opacity: 0; }
+            100% { transform: scale(1.35); opacity: 0; }
+        }
+        .send-pill-btn .send-icon {
+            transition: transform 0.4s cubic-bezier(0.16, 0.84, 0.24, 1), opacity 0.32s ease;
+        }
+        .send-pill-btn.send-launch .send-icon {
+            animation: sendFlyAway 0.58s cubic-bezier(0.55, 0, 0.5, 1) forwards;
+        }
+        @keyframes sendFlyAway {
+            0%   { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 1; }
+            30%  { transform: translate(-4px, 3px) rotate(-8deg) scale(0.94); opacity: 1; }
+            100% { transform: translate(-32px, -28px) rotate(-24deg) scale(0.4); opacity: 0; }
+        }
+        .send-pill-btn .send-icon-clone {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            opacity: 0;
+        }
+        .send-pill-btn.send-launch .send-icon-clone {
+            animation: sendFlyIn 0.58s cubic-bezier(0.16, 0.84, 0.24, 1) forwards;
+            animation-delay: 0.28s;
+        }
+        @keyframes sendFlyIn {
+            0%   { transform: translate(26px, -24px) rotate(20deg) scale(0.4); opacity: 0; }
+            100% { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 1; }
+        }
+
+        /* ── Shine sweep on product minis + routine summary ────── */
+        .product-mini::before,
+        .routine-summary-card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(
+                115deg,
+                transparent 30%,
+                rgba(255, 255, 255, 0.55) 48%,
+                rgba(255, 255, 255, 0.85) 50%,
+                rgba(255, 255, 255, 0.55) 52%,
+                transparent 70%
+            );
+            transform: translateX(-120%);
+            transition: transform 0.9s cubic-bezier(0.16, 0.84, 0.24, 1);
+            pointer-events: none;
+            z-index: 2;
+        }
+        .product-mini:hover::before,
+        .routine-summary-card:hover::before {
+            transform: translateX(120%);
+        }
+
+        /* ── Spring-scale icon buttons ─────────────────────────── */
+        .modal-icon-btn,
+        .pill-icon-btn,
+        .reset-btn {
+            transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1),
+                        background 0.2s ease,
+                        color 0.2s ease,
+                        box-shadow 0.2s ease;
+        }
+        .modal-icon-btn:active,
+        .pill-icon-btn:active { transform: scale(0.86); }
+        .modal-icon-btn:hover,
+        .pill-icon-btn:hover  { transform: scale(1.08); }
+        .reset-btn:active     { transform: scale(0.95); }
+        .reset-btn:hover      { transform: scale(1.03); }
+
+        /* ── Hover-tilt product images ─────────────────────────── */
+        .product-mini-img-wrap img,
+        .routine-summary-img-wrap img,
+        .routine-step-product-img-wrap img,
+        .analysis-product-hero-img img {
+            transition: transform 0.45s cubic-bezier(0.16, 0.84, 0.24, 1);
+            will-change: transform;
+        }
+        .product-mini:hover .product-mini-img-wrap img,
+        .routine-summary-card:hover .routine-summary-img-wrap img,
+        .routine-step-product:hover .routine-step-product-img-wrap img {
+            transform: scale(1.08) rotate(-2.5deg);
+        }
+        .analysis-product-hero-img:hover img {
+            transform: scale(1.1) rotate(2.5deg);
+        }
+
+        /* ── Smart scroll FAB unread pulse ─────────────────────── */
+        .fab-unread-dot {
+            animation: pulseSoft 1.6s ease-in-out infinite, unreadGlow 2s ease-in-out infinite;
+        }
+        @keyframes unreadGlow {
+            0%, 100% { box-shadow: 0 0 0 2px rgba(124, 174, 135, 0.3), 0 0 0 0 rgba(85, 143, 98, 0.5); }
+            50%      { box-shadow: 0 0 0 2px rgba(124, 174, 135, 0.3), 0 0 0 8px rgba(85, 143, 98, 0); }
+        }
+
+        /* ── Condensing header on scroll ───────────────────────── */
+        header.surface-strong {
+            transition:
+                padding 0.32s cubic-bezier(0.16, 0.84, 0.24, 1),
+                box-shadow 0.32s ease,
+                background 0.32s ease;
+        }
+        header.condensed {
+            padding-top: 0.55rem !important;
+            padding-bottom: 0.55rem !important;
+            box-shadow: 0 1px 0 0 rgba(255, 255, 255, 1) inset,
+                        0 2px 4px rgba(45, 60, 48, 0.06),
+                        0 10px 32px rgba(45, 60, 48, 0.1) !important;
+        }
+
+        /* ── Routine budget bar shimmer ────────────────────────── */
+        .routine-budget-fill {
+            position: relative;
+            overflow: hidden;
+        }
+        .routine-budget-fill::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(
+                90deg,
+                transparent 0%,
+                rgba(255, 255, 255, 0.55) 45%,
+                rgba(255, 255, 255, 0.85) 50%,
+                rgba(255, 255, 255, 0.55) 55%,
+                transparent 100%
+            );
+            background-size: 200% 100%;
+            animation: budgetShimmer 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes budgetShimmer {
+            0%   { background-position: -100% 0; }
+            100% { background-position: 200% 0; }
+        }
+
+        /* ── Quick-reply chips pop in one by one ───────────────── */
+        .qr-chip {
+            opacity: 0;
+            transform: translateY(6px) scale(0.92);
+            animation: chipPop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        }
+        @keyframes chipPop {
+            0%   { opacity: 0; transform: translateY(6px) scale(0.92); }
+            60%  { opacity: 1; transform: translateY(-1px) scale(1.02); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .qr-chip:hover {
+            background: #e8f1e9 !important;
+            border-color: #7cae87 !important;
+            transform: translateY(-1px) scale(1.02) !important;
+            box-shadow: 0 4px 12px rgba(85, 143, 98, 0.15);
+        }
+        .qr-chip:active { transform: scale(0.96) !important; }
+
+        /* ── Dialog / lightbox spring entrances ────────────────── */
+        dialog.wathiq-modal[open] {
+            animation: dialogSpringIn 0.46s cubic-bezier(0.16, 1.24, 0.32, 1) forwards;
+        }
+        dialog.wathiq-modal[open]::backdrop {
+            animation: backdropFade 0.3s ease-out forwards;
+        }
+        @keyframes dialogSpringIn {
+            0%   { opacity: 0; transform: translateY(14px) scale(0.94); }
+            60%  { opacity: 1; transform: translateY(-2px) scale(1.005); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes backdropFade {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        .modal-content-shell {
+            animation: lightboxSpring 0.46s cubic-bezier(0.16, 1.24, 0.32, 1) forwards !important;
+        }
+        @keyframes lightboxSpring {
+            0%   { opacity: 0; transform: scale(0.88) translateY(12px); }
+            60%  { opacity: 1; transform: scale(1.01) translateY(-2px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+
+        /* ── Full prefers-reduced-motion support ───────────────── */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
+            .ripple-ink,
+            .product-mini::before,
+            .routine-summary-card::before,
+            .routine-budget-fill::after,
+            .send-pill-btn::after { display: none !important; }
+            .qr-chip { opacity: 1 !important; transform: none !important; }
+            .accordion-body,
+            .accordion-body .acc-detail,
+            .accordion-body .standout-row,
+            .accordion-body .acc-note,
+            .accordion-body .acc-row { transition: none !important; }
+            .score-ring-fill { transition: none !important; }
+        }

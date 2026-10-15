@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { loadApprovedContributions } from '../agent/contributions';
 
 dotenv.config();
 
@@ -10,10 +11,14 @@ const WATHIQ_CATALOG_URL = process.env.WATHIQ_CATALOG_URL || 'https://cdn.jsdeli
 const LOCAL_CATALOG_PATH = path.join(process.cwd(), 'data', 'catalog.json');
 
 // ─── NETWORK TUNING ──────────────────────────────────────────────────────────
-const CATALOG_TIMEOUT_MS = parseInt(process.env.WATHIQ_CATALOG_TIMEOUT_MS || '15000', 10);
-const EVALUATE_TIMEOUT_MS = parseInt(process.env.WATHIQ_EVALUATE_TIMEOUT_MS || '20000', 10);
-const CATALOG_RETRIES = 2;
-const RETRY_BASE_DELAY_MS = 600;
+const CATALOG_TIMEOUT_MS = Math.max(1000, parseInt(process.env.WATHIQ_CATALOG_TIMEOUT_MS || '4000', 10));
+const EVALUATE_TIMEOUT_MS = Math.max(1000, parseInt(process.env.WATHIQ_EVALUATE_TIMEOUT_MS || '15000', 10));
+const CATALOG_RETRIES = Math.max(0, Math.min(2, parseInt(process.env.WATHIQ_CATALOG_RETRIES || '1', 10)));
+const RETRY_BASE_DELAY_MS = Math.max(0, parseInt(process.env.WATHIQ_CATALOG_RETRY_BASE_MS || '250', 10));
+const CATALOG_FAILURE_COOLDOWN_MS = Math.max(1000, parseInt(process.env.WATHIQ_CATALOG_FAILURE_COOLDOWN_MS || '10000', 10));
+let catalogFailureUntil = 0;
+let lastCatalogFailure = '';
+const NETWORK_TIMING_LOGS = process.env.AGENT_DEBUG !== 'false';
 
 // ─── EVALUATION CACHE ────────────────────────────────────────────────────────
 // evaluate_product, compare_products, brand category-focus, the unknown-
@@ -69,13 +74,22 @@ function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+async function fetchTextWithTimeout(
+    url: string,
+    options: RequestInit,
+    timeoutMs: number,
+): Promise<{ response: Response; bodyText: string }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        return await fetch(url, { ...options, signal: controller.signal });
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        // IMPORTANT: consume the response body BEFORE clearing the timer.
+        // `fetch()` resolves when headers arrive; a slow/stalled JSON body was
+        // previously able to bypass the timeout and hold a tool call forever.
+        const bodyText = await response.text();
+        return { response, bodyText };
     } catch (err: any) {
-        if (err?.name === 'AbortError') {
+        if (err?.name === 'AbortError' || controller.signal.aborted) {
             throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
         }
         throw err;
@@ -105,42 +119,77 @@ function readDiskCatalog(): any[] | null {
 async function fetchCatalogFromNetwork(): Promise<any[]> {
     let lastError: any = null;
     for (let attempt = 0; attempt <= CATALOG_RETRIES; attempt++) {
+        const startedAt = Date.now();
         try {
-            const response = await fetchWithTimeout(WATHIQ_CATALOG_URL, {}, CATALOG_TIMEOUT_MS);
+            const { response, bodyText } = await fetchTextWithTimeout(WATHIQ_CATALOG_URL, {}, CATALOG_TIMEOUT_MS);
             if (!response.ok) {
                 throw new Error(`Failed to fetch catalog: ${response.status} ${response.statusText}`);
             }
-            const data = await response.json();
+            let data: any;
+            try { data = JSON.parse(bodyText); }
+            catch { throw new Error('Failed to parse catalog JSON response'); }
             if (!isValidCatalog(data)) {
                 throw new Error('Catalog payload failed validation (not a non-empty product array)');
             }
+            catalogFailureUntil = 0;
+            lastCatalogFailure = '';
+            if (NETWORK_TIMING_LOGS) console.log(`[WATHIQ][CATALOG] network load succeeded durationMs=${Date.now() - startedAt} products=${data.length} attempt=${attempt + 1}/${CATALOG_RETRIES + 1}`);
             return data;
         } catch (err: any) {
             lastError = err;
-            console.warn(`[WATHIQ] Catalog fetch attempt ${attempt + 1}/${CATALOG_RETRIES + 1} failed: ${err.message}`);
+            lastCatalogFailure = String(err?.message || err);
+            console.warn(`[WATHIQ][CATALOG] fetch failed durationMs=${Date.now() - startedAt} attempt=${attempt + 1}/${CATALOG_RETRIES + 1}: ${lastCatalogFailure}`);
             if (attempt < CATALOG_RETRIES) await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, attempt));
         }
     }
+    catalogFailureUntil = Date.now() + CATALOG_FAILURE_COOLDOWN_MS;
     throw lastError;
+}
+
+/** Merges moderator-approved community products into a catalog array (by id, never overriding). */
+function withApproved(data: any[]): any[] {
+    try {
+        const extra = loadApprovedContributions();
+        if (!extra.length) return data;
+        const have = new Set(data.map(p => String(p.id)));
+        const add = extra.filter(p => p?.id && !have.has(String(p.id)));
+        return add.length ? [...data, ...add] : data;
+    } catch { return data; }
+}
+
+/** Called after a moderator approves a contribution: adds it to the live catalog without a refetch. */
+export function mergeApprovedIntoCatalog(): number {
+    if (!catalogCache) return 0;
+    const merged = withApproved(catalogCache);
+    const added = merged.length - catalogCache.length;
+    if (added > 0) catalogCache = merged;
+    return added;
 }
 
 export async function getProducts(): Promise<any[]> {
     if (catalogCache && Date.now() - lastFetch < CACHE_TTL) {
+        if (NETWORK_TIMING_LOGS) console.log(`[WATHIQ][CATALOG] memory cache hit products=${catalogCache.length}`);
         return catalogCache;
     }
 
     const diskData = readDiskCatalog();
     if (diskData) {
-        catalogCache = diskData;
+        catalogCache = withApproved(diskData);
         lastFetch = Date.now();
-        return diskData;
+        catalogFailureUntil = 0;
+        lastCatalogFailure = '';
+        if (NETWORK_TIMING_LOGS) console.log(`[WATHIQ][CATALOG] disk cache hit products=${catalogCache.length}`);
+        return catalogCache;
     }
 
     if (catalogInFlight) return catalogInFlight;
+    if (!catalogCache && Date.now() < catalogFailureUntil) {
+        throw new Error(`Catalog temporarily unavailable; retry after cooldown. Last error: ${lastCatalogFailure || 'unknown'}`);
+    }
 
     catalogInFlight = (async () => {
         try {
-            const data = await fetchCatalogFromNetwork();
+            const data = withApproved(await fetchCatalogFromNetwork());
             catalogCache = data;
             lastFetch = Date.now();
 
@@ -183,16 +232,26 @@ export async function refreshCatalog(): Promise<number> {
 }
 
 async function evaluateRemote(payload: any): Promise<any> {
-    const response = await fetchWithTimeout(WATHIQ_EVALUATE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-    }, EVALUATE_TIMEOUT_MS);
+    const startedAt = Date.now();
+    try {
+        const { response, bodyText } = await fetchTextWithTimeout(WATHIQ_EVALUATE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }, EVALUATE_TIMEOUT_MS);
 
-    if (!response.ok) {
-        throw new Error(`Evaluation API failed: ${response.status} ${response.statusText}`);
+        if (!response.ok) {
+            throw new Error(`Evaluation API failed: ${response.status} ${response.statusText}`);
+        }
+        let result: any;
+        try { result = JSON.parse(bodyText); }
+        catch { throw new Error('Failed to parse evaluation JSON response'); }
+        if (NETWORK_TIMING_LOGS) console.log(`[WATHIQ][EVALUATE] remote completed durationMs=${Date.now() - startedAt}`);
+        return result;
+    } catch (error: any) {
+        console.warn(`[WATHIQ][EVALUATE] remote failed durationMs=${Date.now() - startedAt}: ${error?.message || error}`);
+        throw error;
     }
-    return await response.json();
 }
 
 export async function evaluateProduct(payload: any): Promise<any> {

@@ -1,0 +1,37 @@
+        <!-- Header -->
+        <header class="wathiq-header surface-strong flex items-center justify-between z-10 shrink-0" style="padding: 0.9rem 1.5rem;">
+            <div class="flex items-center gap-3 min-w-0">
+                <div class="brand-icon rounded-2xl flex items-center justify-center text-white shrink-0" style="width: 42px; height: 42px;">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><use href="#i-flask"/></svg>
+                </div>
+                <div class="min-w-0">
+                    <h1 class="font-extrabold tracking-tight text-sage-900 truncate" style="font-size: 1.15rem; line-height: 1.2;">وثيق</h1>
+                    <p class="text-mist-500 font-medium truncate" style="font-size: 0.72rem; margin-top: 2px;">تحدث مع وثيق</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2.5 shrink-0">
+                <div id="authHeader" class="flex items-center gap-2">
+                    <button id="authIconBtn" type="button" class="modal-icon-btn" aria-label="Sign in" title="Sign in">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-user"/></svg>
+                    </button>
+                    <button id="shelfIconBtn" type="button" class="modal-icon-btn" aria-label="My shelf" title="My shelf">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-package"/></svg>
+                    </button>
+                </div>
+                <div class="engine-switch" style="display: none !important;" title="تبديل محرك الذكاء الاصطناعي">
+    <button type="button" id="engineGeminiBtn" onclick="setEngine('gemini')" class="engine-btn active" title="Google Gemini 3.5 Flash Lite">
+        <span>💎 Gemini</span>
+    </button>
+    <button type="button" id="engineGroqBtn" onclick="setEngine('groq')" class="engine-btn" title="Groq OSS (Fast)">
+        <span>⚡ Groq</span>
+    </button>
+</div>
+
+
+                <button id="resetChatBtn" class="reset-btn bg-white/70 hover:bg-white text-mist-600 hover:text-sage-800 font-semibold transition shadow-soft flex items-center gap-1.5" style="padding: 0.5rem 0.9rem; border-radius: 0.7rem; font-size: 0.78rem;">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg>
+                    <span class="hidden sm:inline">محادثة جديدة</span>
+                </button>
+            </div>
+        </header>

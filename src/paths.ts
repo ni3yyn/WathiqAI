@@ -19,3 +19,10 @@ export const REVIEWS_DB_CANDIDATES = [
     path.join(SRC_DIR, 'reviews_db.json'),
     path.join(process.cwd(), 'reviews_db.json'),
 ];
+
+// ── v5: learning / transparency / contributions ──────────────────────────────
+const DATA_DIR = path.join(process.cwd(), 'data');
+export const REVIEW_QUEUE_FILE = process.env.REVIEW_QUEUE_FILE || path.join(DATA_DIR, 'review_queue.json');
+export const FEEDBACK_FILE = process.env.FEEDBACK_FILE || path.join(DATA_DIR, 'feedback.jsonl');
+export const CONTRIBUTIONS_FILE = process.env.CONTRIBUTIONS_FILE || path.join(DATA_DIR, 'contributions.json');
+export const APPROVED_CONTRIBUTIONS_FILE = process.env.APPROVED_CONTRIBUTIONS_FILE || path.join(DATA_DIR, 'approved_contributions.json');
