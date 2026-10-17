@@ -1,6 +1,6 @@
             <div class="floating-input-wrap animate-fade-in">
-                <!-- Photo preview bar (injected by JS when photo selected) -->
-                <div id="photoPreviewBar" style="display:none;"></div>
+                <!-- Selected photos remain visible here until the user sends the message. -->
+                <div id="photoPreviewBar" class="photo-preview-bar" style="display:none;" aria-live="polite" aria-label="الصور المرفقة"></div>
                 <form id="chatForm" class="floating-pill">
                     
                     <button 
@@ -13,18 +13,20 @@
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-mic"/></svg>
                     </button>
 
-                    <!-- Photo attach -->
-                    <input type="file" id="photoFileInput" accept="image/*" style="display:none;"
-                        onchange="if(this.files[0]) handlePhotoAttach(this.files[0]); this.value='';">
-                    <button 
-                        type="button" 
+                    <!-- Explicit image attach control. Events are wired in chat-interactions.js after this fragment mounts. -->
+                    <input type="file" id="photoFileInput" class="photo-file-input"
+                        accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple
+                        aria-label="اختيار صور المنتج">
+                    <button
+                        type="button"
                         id="photoBtn"
-                        onclick="document.getElementById('photoFileInput').click()"
-                        class="pill-icon-btn"
-                        title="إرفاق صورة"
-                        style="opacity:0.65;"
+                        class="pill-icon-btn photo-attach-btn"
+                        title="إرفاق صورة المنتج أو قائمة المكونات"
+                        aria-label="إرفاق صورة"
+                        aria-controls="photoFileInput"
                     >
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                        <svg aria-hidden="true" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                        <span class="photo-attach-label">إرفاق صورة</span>
                     </button>
 
                     <textarea 

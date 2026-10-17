@@ -71,6 +71,90 @@ export function normalizeArabicText(text: any): string {
         .trim();
 }
 
+
+
+// ─── PRODUCT-JUDGMENT ACTION TAXONOMY ────────────────────────────────────────
+// Domain vocabulary above normalizes WHAT the user talks about; this small
+// action taxonomy maps HOW they ask to canonical intents. It is deliberately
+// separate from category/ingredient aliases, so new Darija/Arabizi expressions
+// can be added without weakening product/entity resolution or growing the
+// router into a long list of unrelated regular expressions.
+const PRODUCT_JUDGMENT_PHRASES = [
+    // English
+    'what do you think', 'what do u think', 'what is your opinion', 'your opinion',
+    'is this good', 'is it good', 'is that good', 'is this any good', 'is it any good',
+    'is it worth', 'is this worth', 'worth buying', 'worth it', 'should i buy',
+    'would you recommend', 'do you recommend', 'can i trust', 'would you trust', 'would you use',
+    'should i go for', 'is it effective', 'does it work', 'how good is', 'is it safe', 'is this safe',
+    'is this product good', 'is this worth the price', 'worth the price',
+    // French
+    'qu en penses tu', 'tu en penses quoi', 'vous en pensez quoi', 'ça vaut le coup',
+    'ca vaut le coup', 'est ce que ça vaut le coup', 'est ce que ca vaut le coup',
+    'tu recommandes', 'vous recommandez', 'est il efficace', 'est ce un bon produit',
+    'ça marche', 'ca marche', 'ça vaut le prix', 'ca vaut le prix', 'tu me le conseilles',
+    // Arabic / Algerian Darija (MSA spelling variants are normalized above)
+    'وش رايك', 'واش رايك', 'شنو رايك', 'ما رايك', 'ما رأيك', 'رايك فيه', 'رايك فيها',
+    'هل هذا جيد', 'هل هذي جيدة', 'هل هو جيد', 'هل المنتج جيد', 'هل يستحق', 'يستاهل',
+    'يستاهل الشراء', 'يسوى', 'ينصح به', 'تنصحني بيه', 'تنصحني به', 'ينفع',
+    'مليح', 'باهي', 'واش يصلح', 'هل يصلح', 'نقدر نعتمد عليه', 'هل اشتريه', 'هل هو آمن', 'هل هذا آمن',
+    // Common Arabizi
+    'wach rayek', 'chno rayek', 'wach yestahel', 'yestahel nchrih', 'yesswa',
+    'mlih', 'bahi', 'tansa7ni bih',
+];
+
+function normalizeActionPhrase(value: string): string {
+    return normalizeArabicText(value)
+        .replace(/[؟?!.,،;:()[\]{}"'’`\-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/** Recognizes the product-judgment ACTION, not the target product. */
+export function isProductJudgmentIntent(text: string): boolean {
+    const normalized = normalizeActionPhrase(String(text || ''));
+    if (!normalized) return false;
+    const learned = learnedCache['evaluate_product'] || [];
+    const phrases = [...PRODUCT_JUDGMENT_PHRASES, ...learned].map(normalizeActionPhrase).filter(Boolean);
+    const phraseMatch = phrases.some(phrase => {
+        // Exact/whole phrase matching avoids triggering on fragments such as
+        // "good" inside a longer, unrelated sentence.
+        return normalized === phrase || normalized.startsWith(`${phrase} `)
+            || normalized.includes(` ${phrase} `) || normalized.endsWith(` ${phrase}`);
+    });
+    if (phraseMatch) return true;
+
+    // Product judgments are often phrased with the entity in the middle rather
+    // than by a fixed alias: "is Alpha Serum any good?", "هل هذا المنتج ينفع؟",
+    // "est-ce que CeraVe vaut le coup ?". Require a question/judgment frame AND
+    // a verdict cue; a bare positive adjective never classifies an intent.
+    const englishQuestion = /^(?:(?:is|are|does|do|can|could|would|should)\b.{1,100}\b(?:good|worth|effective|works?|safe|suitable|recommend(?:ed)?|trust|buy|worthwhile)\b|how\s+good\s+is\b.{1,100})/i.test(normalized);
+    const frenchQuestion = /^(?:(?:est ce que|est il|est elle|tu recommandes|vous recommandez)\b.{1,100}\b(?:bon|bonne|efficace|conseille|recommande|vaut le coup|sur)\b|\b(?:vaut le coup|vaut le prix)\b)/i.test(normalized);
+    const arabicQuestion = /(?:^(?:هل|واش|وش|شنو|تنصحني|تنصح|نقدر|يصلح|يستاهل|يسوى)\b.{0,100}\b(?:مليح|باهي|ينفع|يستاهل|يسوى|آمن|امن|ننصح|نشتري|يصلح)|(?:مليح|باهي|ينفع|يستاهل|يسوى|ينصح به|آمن|امن)\s*[؟?]*$)/i.test(normalized);
+    return englishQuestion || frenchQuestion || arabicQuestion;
+}
+
+/** True only for a context-only judgement; never steals a new named product. */
+export function isContextOnlyProductJudgment(text: string): boolean {
+    const value = normalizeActionPhrase(String(text || ''));
+    if (!value) return false;
+    const exactContextForms = [
+        'what do you think', 'what do u think', 'what do you think about it', 'what do you think of it',
+        'what do you think about this', 'what do you think of this', 'what do you think about that', 'what do you think of that',
+        'what do u think about it', 'what do u think of it', 'what do u think about this', 'what do u think of this',
+        'is this good', 'is this any good', 'is it good', 'is it any good', 'is that good',
+        'is it worth it', 'is this worth it', 'is it worth buying', 'worth it', 'worth buying',
+        'should i buy it', 'does it work', 'would you recommend it', 'do you recommend it',
+        'وش رايك', 'واش رايك', 'شنو رايك', 'وش رايك فيه', 'واش رايك فيه', 'شنو رايك فيه',
+        'وش رايك في هذا', 'واش رايك في هذا', 'وش رايك في هذي', 'واش رايك في هذي',
+        'رايك فيه', 'رايك فيها', 'هل هذا جيد', 'هل هذي جيدة', 'هل هو جيد', 'هل يستحق',
+        'يستاهل', 'يسوى', 'مليح', 'باهي', 'واش يصلح', 'تنصحني بيه',
+        'qu en penses tu', 'tu en penses quoi', 'ça vaut le coup', 'ca vaut le coup',
+        'tu recommandes', 'ça marche', 'ca marche', 'wach rayek', 'chno rayek',
+        'wach yestahel', 'mlih', 'bahi',
+    ].map(normalizeActionPhrase);
+    return exactContextForms.includes(value);
+}
+
 // ─── 1. COUNTRIES ─────────────────────────────────────────────────────────────
 const COUNTRY_MAP: { [key: string]: string } = {
     // Algeria
@@ -342,6 +426,30 @@ export function detectCategoryInText(rawText?: string): string | undefined {
         if (alias.length > 2 && folded.includes(alias)) return canonical;
     }
     return undefined;
+}
+
+/** Returns every distinct product category mentioned, ordered by first appearance. */
+export function detectCategoriesInText(rawText?: string): string[] {
+    if (!rawText) return [];
+    const text = ` ${lightFold(rawText)} `;
+    const found: Array<{ index: number; length: number; canonical: string }> = [];
+    for (const { folded: alias, canonical } of CATEGORY_ALIASES_FOLDED) {
+        if (alias.length < 2) continue;
+        let index = text.indexOf(` ${alias} `);
+        if (index < 0 && alias.length > 2) index = text.indexOf(alias);
+        if (index >= 0) found.push({ index, length: alias.length, canonical });
+    }
+    found.sort((a, b) => a.index - b.index || b.length - a.length);
+    const categories: string[] = [];
+    const occupied: Array<{ start: number; end: number }> = [];
+    for (const match of found) {
+        // Prefer the longest alias at a position: "eye cream" is not both
+        // eye_cream and lotion_cream; "hair serum" is not a skin serum too.
+        if (occupied.some(r => match.index < r.end && match.index + match.length > r.start)) continue;
+        occupied.push({ start: match.index, end: match.index + match.length });
+        if (!categories.includes(match.canonical)) categories.push(match.canonical);
+    }
+    return categories;
 }
 
 // ─── 3. SKIN & HAIR TYPES (CANONICAL ARABIC DATABASE TARGET TYPES) ─────────────

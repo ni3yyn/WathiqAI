@@ -9,7 +9,7 @@
  * Deterministic after the single vision call: no extra model round-trips.
  */
 import type { SessionState, AgentStateTracker } from './sessionMemory';
-import { getProduct, norm } from './tools/getProduct';
+import { getProduct } from './tools/getProduct';
 import { sanitizeScanImages, ExtractedLabel, LabelParser } from './tools/scanShelfLabel';
 import { emitCardForTool, resetTurnState } from './cards';
 import { tr, detectVoice, calm, TLang as Lang } from './voice';
@@ -88,9 +88,11 @@ export async function tryScanLane(input: ScanLaneInput): Promise<ScanLaneResult 
 
     const hasIdentity = label.brand && label.brand !== PLACEHOLDER_BRAND && label.name && label.name !== PLACEHOLDER_NAME;
     const ingredientCount = (label.ingredients || '').split(',').filter(s => s.trim().length > 1).length;
+    // Fail closed: missing confidence is not evidence that the INCI was read accurately.
+    const ingredientsReadConfidence = label.ingredientsReadConfidence || 'low';
     const scanCard = {
         brand: label.brand, name: label.name, category: label.category, quantity: label.quantity,
-        ingredientCount, recognized: !!hasIdentity,
+        ingredientCount, ingredientsReadConfidence, recognized: !!hasIdentity,
     };
     (input.turnState as any).lastLabelScan = scanCard;
     // server-side only: the INCI text + whether the product is uncatalogued (for the contribution offer)
@@ -102,9 +104,25 @@ export async function tryScanLane(input: ScanLaneInput): Promise<ScanLaneResult 
     if (hasIdentity) {
         const q = `${label.brand} ${label.name}`;
         const res = await getProduct({ productName: q, query: q });
+        if (res.candidates?.length) {
+            // Visual/OCR text often provides a brand plus only a partial product name.
+            // Preserve those matches as selectable cards instead of silently guessing
+            // or discarding the catalog search result.
+            input.state.lastProductResults = res.candidates as any;
+            input.turnState.lastProductResults = res.candidates as any;
+            input.emitCard?.('product_results', { products: res.candidates });
+            return reply(tr(lang, {
+                ar: `قرأت من الصورة اسمًا قريبًا من ${scanned}، لكن ظهرت عدة منتجات محتملة. اختر المنتج الصحيح من البطاقات حتى لا أقيّم منتجًا مختلفًا.`,
+                fr: `J'ai lu un nom proche de ${scanned}, mais plusieurs produits correspondent. Choisissez la bonne carte pour éviter d'évaluer le mauvais produit.`,
+                en: `I read a name close to ${scanned}, but several catalog products match. Choose the correct card so I don't evaluate the wrong product.`,
+            }), 'get_product');
+        }
         if (res.found && res.product) {
-            const strong = /^(exact_id|partial_id|exact_name|unique_substring)/.test(res.matchStrategy || '')
-                || norm(q).includes(norm(res.product.brand));
+            // Only use product-name resolution that the lookup itself marked high-confidence.
+            // A brand appearing in the OCR text is not enough to prove product identity.
+            const strategy = res.matchStrategy || '';
+            const strong = strategy === 'exact_name' || strategy === 'unique_substring' || strategy === 'unique_brand_category'
+                || /^fuzzy_name \((?:7[2-9]|[89]\d|100)%\)$/.test(strategy);
             if (strong) {
                 const out = await run(input.tools, 'evaluate_product', { productId: res.product.id });
                 if (out && typeof out.oilGuardScore === 'number') {
@@ -122,7 +140,7 @@ export async function tryScanLane(input: ScanLaneInput): Promise<ScanLaneResult 
     }
 
     // ── 2. Not in catalog → score the INCI list read from the photo ──────────
-    if (ingredientCount >= 2) {
+    if (ingredientCount >= 2 && ingredientsReadConfidence !== 'low') {
         const out = await run(input.tools, 'check_ingredient_list', {
             ingredients_text: label.ingredients,
             product_type: label.category,
@@ -153,9 +171,9 @@ export async function tryScanLane(input: ScanLaneInput): Promise<ScanLaneResult 
     resetTurnState(input.turnState);
     return reply(hasIdentity
         ? tr(lang, {
-            ar: `تعرّفت على ${scanned} لكنه غير موجود في الكتالوج ولم أقرأ قائمة مكوناته. صوّر الجهة الخلفية (INCI) لأقيّمه لك.`,
-            fr: `J'ai reconnu ${scanned} mais il n'est pas au catalogue et je n'ai pas lu les ingrédients. Photographiez le dos (INCI) et je l'évalue.`,
-            en: `I recognised ${scanned}, but it is not in the catalog and I could not read its ingredients. Photograph the back (INCI list) and I will score it.`,
+            ar: `قرأت اسمًا قريبًا من ${scanned} لكن لم أتمكن من تأكيد المنتج أو قراءة المكونات بثقة. أرفق صورة واضحة للواجهة وصورة ثانية لقائمة INCI في الخلف، وسأبحث في الكتالوج ثم أقيّم التركيبة المقروءة فقط.`,
+            fr: `J'ai lu un nom proche de ${scanned}, sans confirmer le produit ni lire l'INCI de façon fiable. Ajoutez une photo nette de la face avant et une seconde de la liste INCI au dos.`,
+            en: `I read a name close to ${scanned}, but could not confirm the exact catalog item or read the INCI reliably. Attach a clear front photo and a second photo of the back ingredient list.`,
         })
         : tr(lang, {
             ar: 'لم أتعرف على المنتج ولا على مكوناته. صوّر الجهة الخلفية (قائمة المكونات INCI) بإضاءة جيدة وقريبة.',

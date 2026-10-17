@@ -26,6 +26,9 @@ import {
 
 dotenv.config();
 
+// Public build marker so deployment checks can confirm which agent release is running.
+const WATHIQ_AGENT_VERSION = '6.5.1';
+
 // Non-blocking catalog warm-up: in a long-lived server, fetch the catalog
 // during boot instead of making the first user's search pay the cold-start cost.
 // getProducts deduplicates concurrent calls and applies a short cooldown on failure.
@@ -61,6 +64,7 @@ if (authConfig.mode !== 'off') {
 server.get('/health', async (request, reply) => {
     return {
         status: 'alive',
+        version: WATHIQ_AGENT_VERSION,
         timestamp: Date.now(),
         uptime: process.uptime(),
         sessions: sessionMemory.stats(), // per-session memory diagnostics

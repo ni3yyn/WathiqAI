@@ -10,8 +10,11 @@
 export interface ChatImage {
     /** https URL or data: URL */
     url?: string;
-    /** raw base64 (no prefix) */
+    /** raw base64 (no prefix); `base64` is the public UI's current field name */
     data?: string;
+    base64?: string;
+    /** Complete data URL, accepted for clients that use FileReader.readAsDataURL */
+    dataUrl?: string;
     mimeType?: string;
     /** 'front' = pack front, 'inci' = ingredient list / back label */
     role?: 'front' | 'inci';
@@ -21,7 +24,7 @@ export interface ScanImages { frontImage?: string; inciImage?: string }
 
 const MAX_IMAGES = 2;
 const MAX_DATA_CHARS = 8 * 1024 * 1024;       // ~6 MB binary
-const DATA_URL_RE = /^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+const DATA_URL_RE = /^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/i;
 
 function allowedHosts(): string[] {
     return (process.env.SCAN_ALLOWED_HOSTS || 'res.cloudinary.com').split(',').map(h => h.trim().toLowerCase()).filter(Boolean);
@@ -29,10 +32,20 @@ function allowedHosts(): string[] {
 
 function normalizeOne(img: ChatImage | string): { src: string; role?: 'front' | 'inci' } | null {
     const obj: ChatImage = typeof img === 'string' ? { url: img } : (img || {});
-    let src = obj.url || '';
-    if (!src && obj.data) {
-        const mime = /^image\/(jpeg|jpg|png|webp)$/.test(obj.mimeType || '') ? obj.mimeType : 'image/jpeg';
-        src = `data:${mime};base64,${obj.data}`;
+    let src = obj.url || obj.dataUrl || '';
+    const inlineBase64 = typeof obj.base64 === 'string' ? obj.base64 : obj.data;
+    if (!src && inlineBase64) {
+        const candidate = inlineBase64.trim();
+        // Some clients send the complete data URL in the base64 field. Accept it
+        // without double-prefixing, then apply the same size/type validation below.
+        if (/^data:/i.test(candidate)) {
+            src = candidate;
+        } else {
+            const rawMime = String(obj.mimeType || 'image/jpeg').toLowerCase();
+            const mime = rawMime === 'image/jpg' ? 'image/jpeg' : rawMime;
+            if (!/^image\/(jpeg|png|webp)$/.test(mime)) return null;
+            src = `data:${mime};base64,${candidate.replace(/\s+/g, '')}`;
+        }
     }
     if (!src) return null;
 
@@ -76,6 +89,7 @@ export interface ExtractedLabel {
     category: string;
     quantity: string | null;
     ingredients: string;
+    ingredientsReadConfidence?: 'high' | 'medium' | 'low';
     targetTypes?: string[];
     marketingClaims?: string[];
 }

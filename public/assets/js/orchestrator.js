@@ -55,7 +55,9 @@
         script.remove();
         reject(new Error(`Timed out loading script ${path} after 10s`));
       }, 10000);
-      script.src = path;
+      // Bump this release marker so browsers don't keep old component JS after deployment.
+      const versionedPath = `${path}${path.includes('?') ? '&' : '?'}v=6.5.1`;
+      script.src = versionedPath;
       if (type === 'module') script.type = 'module';
       else script.async = false;
       script.onload = () => { clearTimeout(timeout); resolve(); };

@@ -2,10 +2,10 @@
  * Pure message parsers shared by the router (agent.ts) and the fast lane.
  * No I/O here — everything is unit-testable (see scripts/smoke.ts).
  */
-import { detectCategoryInText } from './taxonomy';
+import { detectCategoryInText, detectCategoriesInText } from './taxonomy';
 import { resolveAllConcepts, POTENT_KEYS } from './ingredientKnowledge';
 import { matchReference, parsePriceFromText, ReferenceFingerprint } from './references';
-import type { RoutineAction } from './tools/modifyRoutine';
+import type { RoutineAction, RoutineEditItem } from './tools/modifyRoutine';
 
 export function foldMessage(raw: string): string {
     return String(raw || '')
@@ -51,21 +51,54 @@ export interface RoutineEdit {
     category?: string;
     cheaper?: boolean;
     max_budget?: number;
+    edits?: RoutineEditItem[];
+    /** When true the LLM must extract named products/constraints; never execute a guess in fast lane. */
+    needs_llm?: boolean;
 }
 
 export function parseRoutineEdit(rawMsg: string): RoutineEdit | null {
     const m = foldMessage(rawMsg);
-    if (!m || m.length > 160) return null;
+    if (!m || m.length > 400) return null;
 
     const stepNo = parseStepNumber(m);
-    const cat = detectCategoryInText(m);
-    const cheaper = /ارخص|أرخص|اقل\s*سعر|cheaper|moins\s*cher|less\s*expensive/.test(m);
+    const cats = detectCategoriesInText(m);
+    const cat = cats[0] || detectCategoryInText(m);
+    const cheaper = /ارخص|أرخص|اقل\s*سعر|cheaper|moins\s*cher|less\s*expensive|at\s*a\s*lower\s*price|more\s*affordable/.test(m);
     const budgetM = m.match(/(?:تحت|اقل\s*من|أقل\s*من|under|below|moins\s*de|بميزانيه|بميزانية|ميزانيتي|ميزانيه|ميزانية|budget|حتي|حتى)\s*(?:ال)?\s*(\d{3,6})/i);
     const routineWord = /روتين|routine|الخطوات|steps|[ée]tapes/.test(m);
 
+    const allProducts = /(?:كل|جميع)\s+(?:ال)?(?:ال)?منتجات|كامل(?:ة)?\s+(?:ال)?منتجات|(?:ال)?منتجات\s+(?:كامل|كاملة|كلها|جميعها)|(?:ال)?روتين\s+كامل|بدلهم\s+كامل|غيرهم\s+كامل|غيّرهم\s+كامل|كل\s+المنتجات|\b(?:all|every)\s+(?:the\s+)?products?\b|\b(?:replace|change|swap)\s+everything\b|\bwhole\s+routine\b|\ball\s+steps\b|tous\s+les\s+produits|toute\s+la\s+routine|toutes\s+les\s+[ée]tapes/i.test(m);
     const removeRe = /(?:^|\s)(?:احذف\w*|ازل\w*|أزل\w*|شيل\w*|امسح\w*|remove|delete|drop|supprime\w*|enl[eè]ve\w*|retire\w*)(?=\s|$)|بدون\s+(?:الخطو|خطو)/i;
     const addRe = /(?:^|\s)(?:اضف\w*|أضف\w*|ضيف\w*|زيد\w*|add|ajoute\w*|rajoute\w*|include)(?=\s|$)/i;
     const swapRe = /(?:^|\s)(?:بدل\w*|بدّل\w*|غير|غيّر|غيري|استبدل\w*|swap|replace|change|remplace\w*|chang\w+)(?=\s|$)/i;
+    // Named replacement language should be extracted by the LLM into replacement.name/id;
+    // the fast lane must never silently replace a named product with a random alternative.
+    const namedReplacement = /\bwith\s+(?!(?:cheaper|a cheaper|cheaper alternatives?|alternatives?|other products?|different products?|new products?|more affordable|lower[- ]priced|options?)\b)\S+|\bto\s+(?!(?:cheaper|more affordable|lower|different|new|other|similar|alternatives?|options?|products?)\b)\S+|\bby\s+(?!default\b)\S+|\busing\s+\S+|\bavec\s+(?!(?:des alternatives?|moins cher|des produits? moins chers?|des options?)\b)\S+|\bpar\s+(?!d[eé]faut\b)\S+|بمنتجات\s+(?!أرخص(?:\s|$)|ارخص(?:\s|$)|مختلفة(?:\s|$)|بديلة(?:\s|$)|جديدة(?:\s|$))\S+|بمنتج(?:ة)?\s+(?!أرخص(?:\s|$)|ارخص(?:\s|$)|منتج(?:\s|$)|بديل(?:\s|$)|مختلف(?:\s|$))\S+|بـ\s*\S+|ب(?:غسول|سيروم|مرطب|كريم|واقي|تونر|شامبو|ماسك|مقشر)(?:\s+\S+)?|\sب\s+[a-z][\w-]*/i.test(m);
+
+    const bulkChangeVerb = /بدل|بدّل|غير|غيّر|استبدل|تغيير|تبديل|replace|change|swap|remplace|changer|modifier/i.test(m);
+    // Exclusions/keep-constraints need semantic extraction by the LLM so a
+    // phrase like “replace everything except sunscreen” never changes sunscreen.
+    const hasKeepConstraint = /(?:ما\s*عدا|باستثناء|إلا\s|الا\s|خلي|خلّي|أبق|ابق|اترك|لا\s*تغيّر|لا\s*تبدّل|بدون\s*تغيير|except|excluding|apart\s+from|keep\s+.+\s+unchanged|leave\s+.+\s+as\s+is|sauf|except[eé]|garde[r]?\s+.+\s+(?:inchang[eé]|comme\s+il\s+est))/i.test(m);
+    if (allProducts && (bulkChangeVerb || cheaper)) {
+        if (namedReplacement || hasKeepConstraint) return { action: 'replace_all', cheaper, needs_llm: true, max_budget: budgetM ? parseInt(budgetM[1], 10) : undefined };
+        return { action: 'replace_all', cheaper, max_budget: budgetM ? parseInt(budgetM[1], 10) : undefined };
+    }
+
+    // When several categories are mentioned, build a single atomic batch rather
+    // than editing the first matching category and ignoring the rest.
+    if (cats.length > 1) {
+        let eachAction: 'swap' | 'remove' | 'add' | undefined;
+        if (removeRe.test(m)) eachAction = 'remove';
+        else if (addRe.test(m)) eachAction = 'add';
+        else if (swapRe.test(m) || cheaper) eachAction = 'swap';
+        if (eachAction) {
+            const edits: RoutineEditItem[] = cats.map(category => ({
+                action: eachAction!, category,
+                ...(eachAction === 'swap' && cheaper ? { cheaper: true } : {}),
+            }));
+            return { action: 'batch', edits, cheaper, needs_llm: namedReplacement, max_budget: budgetM ? parseInt(budgetM[1], 10) : undefined };
+        }
+    }
 
     let action: RoutineAction | undefined;
     if (removeRe.test(m) && (stepNo || cat)) action = 'remove';
@@ -80,6 +113,7 @@ export function parseRoutineEdit(rawMsg: string): RoutineEdit | null {
     if (cat) edit.category = cat;
     if (cheaper) edit.cheaper = true;
     if (budgetM) edit.max_budget = parseInt(budgetM[1], 10);
+    if (namedReplacement && action === 'swap') edit.needs_llm = true;
     if (action === 'refit' && !edit.max_budget) return null;
     return edit;
 }
@@ -170,7 +204,8 @@ export function parseCabinetCommand(raw: string): CabinetCommand | null {
     const cab = CABINET_WORDS.test(m);
 
     if (cab && /(?:حيد|حيّد|امسح|احذف|شيل|remove|delete|supprime|enl[eè]ve)/i.test(m)) return { action: 'remove' };
-    if (cab && /(?:وريني|اعرض|شنو|واش\s*عندي|show|list|what|voir|montre|liste|quels|display)/i.test(m)) return { action: 'list' };
+    // Algerian Darija variants used for inventory questions and short follow-ups.
+    if (cab && /(?:وريني|ورّيني|وريهملي|ورّيهملي|ورينيهم|وريهم|اعرض|شنو|واش\s*عندي|وش\s*كاين|واش\s*كاين|شنو\s*كاين|كاين\s*(?:في|ف)\s*خزانتي|show|list|what|voir|montre|liste|quels|display)/i.test(m)) return { action: 'list' };
 
     if (/ما\s*ناسبنيش|مانسبنيش|ما\s*عجبنيش|ماعجبنيش|ما\s*رتاحش|didn'?t\s*(?:suit|work)|did\s*not\s*(?:suit|work)|ça\s*ne\s*m'?a\s*pas\s*(?:convenu|plu)|ne\s*me\s*convient\s*pas|irritated\s*my\s*skin/i.test(m)) {
         return { action: 'mark', status: 'stopped', verdict: 'didnt_suit' };

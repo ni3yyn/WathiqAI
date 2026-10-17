@@ -1,6 +1,6 @@
 import { getProducts } from '../../wathiq/backendClient';
 import { resolvePriceBounds, formatPriceDisplay } from '../priceUtils';
-import { normalizeArabicText } from '../taxonomy';
+import { normalizeArabicText, normalizeCategory, detectCategoryInText } from '../taxonomy';
 
 export interface GetProductArgs {
     productId?: string;    // Exact product ID, partial ID, or ID fragment
@@ -91,7 +91,9 @@ export function formatCandidateForUI(p: any) {
         currency: bounds.currency || 'دج',
         image: p.image || '',
         claims: (p.marketingClaims || []).slice(0, 3),
-        targetTypes: p.targetTypes || []
+        targetTypes: p.targetTypes || [],
+        ingredientsAvailable: Array.isArray(p.ingredients) ? p.ingredients.length > 0 : (typeof p.ingredients === 'string' && p.ingredients.trim().length > 0),
+        canEvaluate: Array.isArray(p.ingredients) ? p.ingredients.length > 0 : (typeof p.ingredients === 'string' && p.ingredients.trim().length > 0)
     };
 }
 
@@ -209,6 +211,65 @@ const GENERIC_SINGLE_WORDS = new Set([
     'mask', 'ماسك', 'قناع', 'scrub', 'مقشر', 'lotion', 'huile', 'زيت', 'oil',
 ]);
 
+// ─── Human-query parsing ─────────────────────────────────────────────────────
+// Real users type a brand and a fragment, not a catalog ID. Strip conversational
+// glue before ranking, but preserve likely brand/name words.
+const QUERY_GLUE = new Set((
+    'وش واش رايك فال ف في فين من عن على تع تاع نتاع هذا هذي هاذي هاد هاذا هادي ' +
+    'قيملي قيم قيمي قيمو قيمني حلل حللي شوف شوفلي رايكم رأيك رأيكم ' +
+    'اريد أريد نحب حاب حابة بغيت نبغي ممكن لو سمحت من فضلك please can you could tell me what do does is the a an of for about this that product one evaluate rate review analyze analyse check ' +
+    'est ce que donne moi dis moi tu peux peux-tu quel quelle le la les un une de du des pour produit avis sur'
+).split(/\s+/).filter(Boolean));
+
+const CATEGORY_QUERY_WORDS = new Set((
+    'sunscreen sun screen spf sunblock solaire ecran écran creme crème واقي واقي شمس واقي الشمس الواقي ' +
+    'serum sérum سيروم غسول منظف cleanser nettoyant face wash cream lotion مرطب كريم moisturizer ' +
+    'shampoo shampoing شامبو toner تونر scrub مقشر oil huile زيت mask masque ماسك conditioner بلسم'
+).split(/\s+/).map(x => norm(x)));
+
+function humanQueryTokens(raw: string): string[] {
+    const normalized = norm(raw);
+    const tokens = normalized.split(/\s+/).map(token => token.replace(/^(?:و|ف|ب)?ال(?=[\u0600-\u06FF])/, ''))
+        .filter(token => token.length > 1 && !QUERY_GLUE.has(token) && !CATEGORY_QUERY_WORDS.has(token));
+    return [...new Set(tokens)];
+}
+
+function editDistance(a: string, b: string): number {
+    if (a === b) return 0;
+    if (!a) return b.length;
+    if (!b) return a.length;
+    let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+        const current = [i];
+        for (let j = 1; j <= b.length; j++) {
+            current[j] = Math.min(
+                current[j - 1] + 1,
+                previous[j] + 1,
+                previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+            );
+        }
+        previous = current;
+    }
+    return previous[b.length];
+}
+
+function tokenMatches(queryToken: string, targetToken: string): boolean {
+    if (queryToken === targetToken) return true;
+    if (queryToken.length < 4 || targetToken.length < 4) return false;
+    if (targetToken.includes(queryToken) || queryToken.includes(targetToken)) return true;
+    const distance = editDistance(queryToken, targetToken);
+    return 1 - distance / Math.max(queryToken.length, targetToken.length) >= 0.76;
+}
+
+function canonicalProductCategory(p: any): string {
+    const raw = typeof p.category === 'object' ? (p.category?.id || p.category?.label || '') : (p.category || '');
+    return normalizeCategory(String(raw)) || String(raw).toLowerCase();
+}
+
+function productHasIngredients(p: any): boolean {
+    return Array.isArray(p.ingredients) ? p.ingredients.length > 0 : (typeof p.ingredients === 'string' && p.ingredients.trim().length > 0);
+}
+
 // ─── Main lookup function ────────────────────────────────────────────────────
 export async function getProduct(args: GetProductArgs): Promise<{
     found: boolean;
@@ -270,7 +331,16 @@ export async function getProduct(args: GetProductArgs): Promise<{
     }
 
     // ── Build combined search text ───────────────────────────────────────────
-    const searchText = [productId, productName, query].filter(Boolean).join(' ').trim();
+    const searchParts = [productId, productName, query]
+        .map(value => typeof value === 'string' ? value.trim() : '')
+        .filter(Boolean);
+    const seenSearchParts = new Set<string>();
+    const searchText = searchParts.filter(part => {
+        const key = norm(part);
+        if (!key || seenSearchParts.has(key)) return false;
+        seenSearchParts.add(key);
+        return true;
+    }).join(' ').trim();
     if (!searchText) {
         return { found: false, suggestion: 'Please provide a product ID or a name/brand to search for.' };
     }
@@ -315,65 +385,89 @@ export async function getProduct(args: GetProductArgs): Promise<{
         }
     }
 
-    // ── Strategy 4: High-Performance Pre-Tokenized Scored Fuzzy Match ─────────
-    const qTokens = normSearch.split(' ').filter(t => t.length > 1);
-    if (qTokens.length === 0) {
-        return { found: false, suggestion: `No product found matching "${searchText}".` };
+    // ── Strategy 4: intent-aware, conservative candidate ranking ──────────────
+    // Retrieval and identity resolution are different decisions. A brand/category
+    // hit must not silently select an arbitrary product when several are plausible.
+    const qTokens = humanQueryTokens(searchText);
+    const queryCategory = detectCategoryInText(searchText);
+    if (qTokens.length === 0 && !queryCategory) {
+        return { found: false, suggestion: 'ما قدرتش نحدد اسم المنتج. اكتب اسم الماركة أو جزءًا من الاسم الموجود على العلبة؛ ما تحتاجش تعرف المعرّف.' };
     }
 
-    type ScoredItem = { raw: any; score: number };
+    type ScoredItem = { raw: any; score: number; brandHits: number; nameHits: number; categoryMatch: boolean; specificHits: number };
     const scored: ScoredItem[] = [];
-
-    for (let i = 0; i < indexedCatalog.length; i++) {
-        const item = indexedCatalog[i];
-        let nameHits = 0;
-        let wideHits = 0;
-        let ingHits = 0;
-
-        for (let j = 0; j < qTokens.length; j++) {
-            const tok = qTokens[j];
-            if (item.normBrandName.includes(tok)) nameHits++;
+    for (const item of indexedCatalog) {
+        const nameTokens = item.normName.split(' ').filter(Boolean);
+        const category = canonicalProductCategory(item.raw);
+        const categoryMatch = !!queryCategory && (category === queryCategory || category.includes(queryCategory) || queryCategory.includes(category));
+        let brandHits = 0, nameHits = 0, specificHits = 0, wideHits = 0;
+        const productBrandTokens = norm(item.raw.brand || '').split(' ').filter(Boolean);
+        for (const tok of qTokens) {
+            const inBrand = productBrandTokens.some((bt: string) => tokenMatches(tok, bt));
+            const inName = nameTokens.some(nt => tokenMatches(tok, nt));
+            if (inBrand) brandHits++;
+            if (inName) {
+                nameHits++;
+                if (tok.length >= 4) specificHits++;
+            }
             if (item.normSearchable.includes(tok)) wideHits++;
-            if (item.normIngredients && item.normIngredients.includes(tok)) ingHits++;
         }
-
-        const nameScore = (nameHits / qTokens.length) * 0.70;
-        const wideScore = (wideHits / qTokens.length) * 0.20;
-        const ingScore = (ingHits / qTokens.length) * 0.10;
-        const totalScore = nameScore + wideScore + ingScore;
-
-        if (totalScore > 0.2) {
-            scored.push({ raw: item.raw, score: totalScore });
+        const denominator = Math.max(1, qTokens.length);
+        const score = (brandHits / denominator * 0.40) + (nameHits / denominator * 0.45) + (wideHits / denominator * 0.10) + (categoryMatch ? 0.30 : 0);
+        if (score > 0.12 || (categoryMatch && brandHits > 0)) {
+            scored.push({ raw: item.raw, score, brandHits, nameHits, categoryMatch, specificHits });
         }
     }
+    scored.sort((a, b) => b.score - a.score || Number(b.categoryMatch) - Number(a.categoryMatch) || b.specificHits - a.specificHits);
 
-    scored.sort((a, b) => b.score - a.score);
-
-    if (scored.length === 0) {
+    if (!scored.length) {
         console.log(`[GET_PRODUCT] No matches for: "${searchText}"`);
-        return {
-            found: false,
-            suggestion: `No product found matching "${searchText}". Try using search_products for broader discovery.`
-        };
+        return { found: false, suggestion: `ما لقيتش منتجًا واضحًا يطابق "${searchText}". جرّب الماركة مع جزء من الاسم، أو اكتب الاسم كما يظهر على العلبة. ما تحتاجش معرّف المنتج.` };
     }
 
-    const top = scored[0];
-    const runnerUp = scored[1];
+    const brandMatched = scored.filter(s => s.brandHits > 0);
+    const categoryAndBrand = queryCategory ? brandMatched.filter(s => s.categoryMatch) : [];
+    // Brand + category may auto-resolve only if exactly one catalog product fits.
+    if (queryCategory && categoryAndBrand.length === 1) {
+        const only = categoryAndBrand[0];
+        console.log(`[GET_PRODUCT] Strategy 4 (unique brand+category): ${only.raw.id}`);
+        return { found: true, matchStrategy: 'unique_brand_category', product: buildProduct(only.raw) };
+    }
 
-    // High confidence if score >= 0.45 and clearly leading
-    const confident = top.score >= 0.45 && (!runnerUp || top.score >= runnerUp.score * 1.3);
-    if (confident) {
-        console.log(`[GET_PRODUCT] Strategy 4 (fuzzy, confident ${(top.score * 100).toFixed(0)}%): ${top.raw.id}`);
+    const top = scored[0], runnerUp = scored[1];
+    const brandNorm = norm(top.raw.brand || '');
+    const queryContainsBrand = !!brandNorm && (` ${norm(searchText)} `).includes(` ${brandNorm} `);
+    const topIsUnique = !runnerUp || top.score >= runnerUp.score * 1.35;
+    const highConfidence = top.score >= 0.72 && topIsUnique && top.specificHits >= 1 && top.nameHits >= 1;
+    if (highConfidence && (queryContainsBrand || top.specificHits >= 2)) {
+        console.log(`[GET_PRODUCT] Strategy 4 (high-confidence name match ${(top.score * 100).toFixed(0)}%): ${top.raw.id}`);
         return { found: true, matchStrategy: `fuzzy_name (${(top.score * 100).toFixed(0)}%)`, product: buildProduct(top.raw) };
     }
 
-    // ── Strategy 5: Ambiguous Candidates (Formatted as UI Cards) ─────────────
-    const candidates = scored.slice(0, 4).map(({ raw }) => formatCandidateForUI(raw));
-    console.log(`[GET_PRODUCT] Strategy 5 (ambiguous): top candidates = ${candidates.map(c => c.id).join(', ')}`);
+    // If a brand is present, avoid polluting the clarification list with unrelated brands.
+    let shortlist = scored;
+    if (brandMatched.length) {
+        const matchedBrands = new Set(brandMatched.map(s => s.raw.brand));
+        const narrowed = scored.filter(s => matchedBrands.has(s.raw.brand));
+        if (narrowed.length) shortlist = narrowed;
+    }
+    if (queryCategory) {
+        const matchingCategory = shortlist.filter(s => s.categoryMatch);
+        if (matchingCategory.length) shortlist = matchingCategory;
+    }
+
+    const candidates = shortlist.slice(0, 5).map(({ raw }) => ({
+        ...formatCandidateForUI(raw),
+        ingredientsAvailable: productHasIngredients(raw),
+        canEvaluate: productHasIngredients(raw),
+    }));
+    console.log(`[GET_PRODUCT] Strategy 5 (clarification required): query="${searchText}" category=${queryCategory || 'none'} candidates=${candidates.map(c => c.id).join(', ')}`);
     return {
         found: false,
         matchStrategy: 'ambiguous',
         candidates,
-        suggestion: `I found ${candidates.length} products that might match "${searchText}". Which one did you mean?`
+        suggestion: candidates.length
+            ? `لقيت منتجات قريبة من "${searchText}". اختار المنتج المقصود من النتائج؛ ما تحتاجش تكتب المعرّف. إذا ما لقيتوش، اكتب الاسم الكامل كما يظهر على العلبة.`
+            : 'ما قدرتش نحدد المنتج بثقة. اكتب اسم الماركة أو الاسم الموجود على العلبة.',
     };
 }

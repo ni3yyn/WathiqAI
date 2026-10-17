@@ -4,6 +4,7 @@ assets/css/base.css
 assets/css/engine-switch.css
 assets/css/motion.css
 assets/css/premium-redesign.css
+assets/css/ui-upgrade.css
 assets/css/responsive.css
 assets/js/modules/accordion.js
 assets/js/modules/engine-switch.js
@@ -67,3 +68,5 @@ components/shelf/shelf.css
 components/shelf/shelf.html
 components/shelf/shelf.js
 index.html
+
+UI_UPGRADE_NOTES.md

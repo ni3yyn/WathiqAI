@@ -1,3 +1,4 @@
+import { emitToolStatus, STATUS } from './statuses';
 /**
  * FAST LANE — answer high-confidence, fully-resolvable requests WITHOUT any
  * model round-trips.
@@ -41,7 +42,7 @@ import { lastEngagedBrand, lastActionWasEvaluation } from './corrections';
 import { welcomeBackNote } from './longterm';
 import { getProducts } from '../wathiq/backendClient';
 import { getSearchEntry } from './tools/searchIndex';
-import { normalizeArabicText } from './taxonomy';
+import { normalizeArabicText, isContextOnlyProductJudgment } from './taxonomy';
 
 export const FAST_LANE_ENABLED = process.env.FAST_LANE !== 'false';
 
@@ -49,7 +50,7 @@ export interface FastIntent {
     likelyTools: string[];
     confidence: 'high' | 'medium' | 'low';
     compound?: boolean;
-    entities: { brand?: string; category?: string; budget?: number; country?: string };
+    entities: { brand?: string; category?: string; budget?: number; country?: string; excludeCategories?: string[] };
     /** Set by the router for "no, I meant X" messages. */
     correction?: { isCorrection: true; category?: string } | null;
 }
@@ -187,8 +188,9 @@ const STOP_WORDS = new Set((
     'ممكن يمكنك من فضلك لو سمحت مع ما هو هي ليه لماذا اريد أريد ابغي نبغي بغيت واش راك كيفاش وجهي وجهك بشرتي بشرتك جلدي وجه بشرة أنا انا نحن i am im je suis tu you my face skin ma peau mon visage ' +
     'does do did it its this that one the a an of for to is are there any have has contain contains containing ' +
     'alternative alternatives dupe dupes cheaper cheap similar like same effect product products please can you could ' +
-    'evaluate rate score analyze analyse check tell me about what whats how ' +
-    'est ce que qu il y a contient contient-il avec sans du de des la le les un une ce cette celui celle moins cher ' +
+    'evaluate rate score analyze analyse check tell me about what whats how should would worth buying good great effective works work safe suitable recommend recommended trust worthwhile price ' +
+    'est-ce est-il est-elle est ce que qu qu-en en il y a contient contient-il avec sans du de des la le les un une ce cette celui celle moins cher vaut coup bon bonne efficace recommandes recommander ' +
+    'مليح باهي يسوى يستاهل ينفع ينصح تنصح تنصحني يستحق آمن امن رايك رأيك وش شنو ' +
     'equivalent équivalent pour produit évalue evalue analyse peux tu s\'il te plait plait'
 ).split(/\s+/).filter(Boolean));
 
@@ -200,8 +202,28 @@ function leftoverTokens(message: string): string[] {
 }
 
 async function resolveProductTarget(message: string, state: SessionState): Promise<{ id: string } | null> {
+    // A product ID is an authoritative entity reference, not part of the fuzzy
+    // product-name query. Resolve it before stripping tokens or considering the
+    // previously discussed product. This avoids routing an explicit ID such as
+    // "DZ-SSE-PHAR-001" into an ambiguous fuzzy-name match.
+    const explicitId = message.match(/\b[A-Z]{2}(?:-[A-Z0-9]{2,}){2,}-\d{3}\b/i)?.[0];
+    if (explicitId) {
+        const byId = await getProduct({ productId: explicitId.toUpperCase() });
+        return byId.found && byId.product?.id ? { id: byId.product.id } : null;
+    }
+
     const ref = resolveProductReference(message, state);
     if (ref?.product?.id) return { id: ref.product.id };
+
+    // Resolve explicit pronoun/judgment follow-ups against session state only;
+    // never guess a product for a generic question or override a new named query.
+    const currentProductId = state.lastProduct?.id || state.lastAnalysis?.productId;
+    const normalized = foldMessage(message).replace(/[.!؟?،,]+/g, ' ').replace(/\s+/g, ' ').trim();
+    // The action taxonomy recognizes many ways to ask for an opinion; this
+    // stricter helper is only used to bind a pronoun-only question to context.
+    // Any named/unresolved product text continues through strict catalog lookup.
+    const contextOnlyReference = isContextOnlyProductJudgment(normalized);
+    if (currentProductId && contextOnlyReference) return { id: currentProductId };
 
     const tokens = leftoverTokens(message);
     if (tokens.length === 0) {
@@ -236,7 +258,7 @@ function changesHuman(lang: Lang, args: any, kind: string): string {
     return parts.join(' · ');
 }
 
-function fmtEvaluate(lang: Lang, out: any, turn: AgentStateTracker, state: SessionState): string {
+function fmtEvaluate(lang: Lang, out: any, turn: AgentStateTracker, state: SessionState, userMessage = ''): string {
     const name = dn(out.brand, out.name);
     const claims: any[] = out.claimsSummary || [];
     const verified = claims.filter(c => /verified|supported|مؤكد|مدعوم/i.test(String(c.status || ''))).length;
@@ -264,6 +286,50 @@ function fmtEvaluate(lang: Lang, out: any, turn: AgentStateTracker, state: Sessi
         });
     }
     if (hasAvoid && flags.length > 0) s += ` ⚠️ ${flags.slice(0, 2).join(' · ')}.`;
+
+    const asksScoreDetails = /(?:why.{0,25}score|score.{0,25}(?:why|breakdown|detail|calculation)|explain.{0,20}(?:score|rating)|how.{0,20}(?:score|rating)|pros?\s*(?:and|&)\s*cons?|pluses?\s*(?:and|&)\s*minuses?|strengths?.{0,15}weaknesses?|pourquoi.{0,25}(?:score|note)|d[eé]tails?.{0,20}(?:score|note)|explique.{0,20}(?:score|note)|إيجابيات|سلبيات|مميزات.{0,12}عيوب|العيوب.{0,12}المزايا|لماذا.{0,20}(?:الدرجة|التقييم|السكور)|سبب.{0,20}(?:الدرجة|التقييم|السكور)|علاش.{0,25}(?:الدرجة|التقييم|السكور)|علاش.{0,25}(?:نقص|زاد)|تفاصيل.{0,20}(?:الدرجة|التقييم|السكور)|اشرح.{0,20}(?:الدرجة|التقييم|السكور)|كيف.{0,20}(?:تحسب|حساب).{0,15}(?:الدرجة|التقييم|السكور))/i.test(userMessage);
+    const asksPersonalMatch = /(?:هل\s*يناسبني|واش\s*(?:يصلحلي|يناسبني|يصلح\s*لبشرتي)|يصلحلي|يناسب\s*(?:بشرتي|حالتي)|يلائم\s*(?:بشرتي|حالتي)|ملاءمة\s*(?:شخصية|لبشرتي|لحالتي)|توافق\s*(?:شخصي|لبشرتي)|suitable\s+for\s+me|good\s+for\s+my\s+skin|suit\s+my\s+skin|personal\s+match|personal\s+suitability|skin\s+compatibility|convient\s+à\s+ma\s+peau|adapt[eé]\s+à\s+ma\s+peau)/i.test(userMessage);
+
+    // Score details are on demand. Never show calculation rows or numeric backend values in chat.
+    if (asksScoreDetails) {
+        const engineBreakdown: any[] = Array.isArray(out.scoreBreakdown)
+            ? out.scoreBreakdown
+            : (((turn.lastAnalysis as any)?.evaluation?.scoreBreakdown) || []);
+        const negatives = engineBreakdown.filter((item: any) => item && typeof item.text === 'string' && item.text.trim()
+            && String(item.type || '').toLowerCase() !== 'calculation'
+            && ['override', 'deduction', 'warning', 'danger', 'negative'].includes(String(item.type || '').toLowerCase()));
+        const positives = engineBreakdown.filter((item: any) => item && typeof item.text === 'string' && item.text.trim()
+            && String(item.type || '').toLowerCase() !== 'calculation'
+            && (['good', 'benefit', 'positive'].includes(String(item.type || '').toLowerCase())
+                || (/^\s*\+/.test(String(item.value || '')) && String(item.type || '').toLowerCase() === 'info')
+                || /ميزة|مناسب لك|تطابق مثالي|تآزر إيجابي/.test(String(item.value || '') + ' ' + item.text)));
+        const selected = [negatives[0] ? { sign: 'minus', text: negatives[0].text } : null,
+            positives[0] ? { sign: 'plus', text: positives[0].text } : null].filter(Boolean) as Array<{ sign: string; text: string }>;
+        for (const factor of selected) {
+            s += ' ' + tr(lang, factor.sign === 'minus' ? {
+                ar: `من العوامل السلبية: ${factor.text}.`,
+                fr: `Un facteur négatif : ${factor.text}.`,
+                en: `One negative factor: ${factor.text}.`,
+            } : {
+                ar: `ومن العوامل الإيجابية: ${factor.text}.`,
+                fr: `Un facteur positif : ${factor.text}.`,
+                en: `One positive factor: ${factor.text}.`,
+            });
+        }
+    }
+
+    const personalMatch = out.personalMatch || (turn.lastAnalysis as any)?.evaluation?.personalMatch;
+    const personalReasons: any[] = Array.isArray(personalMatch?.reasons) ? personalMatch.reasons : [];
+    const personalReason = personalReasons.find((item: any) => typeof item === 'string' ? item.trim() : typeof item?.text === 'string' && item.text.trim());
+    const personalText = typeof personalReason === 'string' ? personalReason : personalReason?.text;
+    if (personalText && (personalMatch?.status === 'danger' || (asksPersonalMatch && personalMatch?.status === 'warning'))) {
+        s += ' ' + tr(lang, {
+            ar: `ولملاءمته لحالتك ملاحظة مهمة: ${personalText}.`,
+            fr: `Pour votre profil, un point important : ${personalText}.`,
+            en: `For your personal match, one important note: ${personalText}.`,
+        });
+    }
+
     if (out.price === '' || out.price === undefined || out.price === null) {
         s += ' ' + tr(lang, { ar: 'ملاحظة: السعر غير متوفر عندنا لهذا المنتج.', fr: 'Note : prix indisponible chez nous.', en: 'Note: no price on file for this product.' });
     }
@@ -337,19 +403,33 @@ function fmtSearch(lang: Lang, out: any, kind: string, args: any): string {
     const tail = more
         ? tr(lang, { ar: ' اكتب "المزيد" لرؤية غيرها.', fr: ' Écrivez « plus » pour en voir d\'autres.', en: ' Say "more" to see others.' })
         : tr(lang, { ar: ' هذه آخر النتائج المطابقة.', fr: ' Ce sont les derniers résultats.', en: ' That is every match.' });
+    const rankedByWathiq = out.rankingMode === 'wathiq_oilGuardScore_desc';
+    const rankingNote = rankedByWathiq
+        ? tr(lang, {
+            ar: ' مرتبة حسب درجة تقييم وثيق الفعلية.',
+            fr: ' Classés selon le score réel d’évaluation Wathiq.',
+            en: ' Ranked by Wathiq’s actual evaluation score.',
+        })
+        : out.fallbackMessage
+            ? tr(lang, {
+                ar: ' لم تتوفر درجات تقييم صالحة؛ لا تعتبر هذه قائمة مرتبة حسب الفعالية.',
+                fr: ' Scores valides indisponibles ; ce classement ne mesure pas l’efficacité.',
+                en: ' Valid evaluation scores were unavailable; this is not an efficacy ranking.',
+            })
+            : '';
     if (kind === 'more') {
         return tr(lang, {
             ar: `إليك ${out.returnedCount} منتجاً إضافياً.`,
             fr: `Voici ${out.returnedCount} produits de plus.`,
             en: `Here are ${out.returnedCount} more products.`,
-        }) + tail;
+        }) + rankingNote + tail;
     }
     const ch = changesHuman(lang, args, 'refine');
     return tr(lang, {
         ar: `حدّثت البحث (${ch}) — ${out.foundCount} نتيجة، هذه أفضل ${out.returnedCount}.`,
         fr: `Recherche mise à jour (${ch}) — ${out.foundCount} résultats, voici les ${out.returnedCount} meilleurs.`,
         en: `Search updated (${ch}) — ${out.foundCount} results, here are the top ${out.returnedCount}.`,
-    }) + tail;
+    }) + rankingNote + tail;
 }
 
 function fmtContains(lang: Lang, out: any): string {
@@ -666,6 +746,16 @@ function fmtGift(lang: Lang, out: any): string {
 }
 
 function fmtRoutineEdit(lang: Lang, out: any): string {
+    if (out?.needsFollowup) {
+        const options = Array.isArray(out.options) && out.options.length
+            ? `\n${out.options.map((x: string, i: number) => `${i + 1}. ${x}`).join('\n')}`
+            : '';
+        return tr(lang, {
+            ar: `${out.message || 'لم أتمكن من تنفيذ التعديل بعد، لكن يمكننا تعديل الطلب.'}\n${out.question || 'ما الخيار الذي تفضّله؟'}${options}`,
+            fr: `${out.message || 'Je ne peux pas encore appliquer cette modification, mais nous pouvons adapter la demande.'}\n${out.question || 'Quelle option préférez-vous ?'}${options}`,
+            en: `${out.message || 'I could not apply that edit yet, but we can adjust the request.'}\n${out.question || 'Which option would you prefer?'}${options}`,
+        });
+    }
     const mod = out.modification || {};
     const total = out.totalCost;
     const n = (p: any) => dn(p?.brand, p?.name);
@@ -688,6 +778,28 @@ function fmtRoutineEdit(lang: Lang, out: any): string {
                 fr: `Ajouté ${n(mod.after.product)} en étape ${mod.after.stepNumber} (${mod.after.product.price} DA). Total : ${total} DA.`,
                 en: `Added ${n(mod.after.product)} as step ${mod.after.stepNumber} (${mod.after.product.price} DZD). Total: ${total} DZD.`,
             });
+        case 'replace_all': {
+            const changes = (mod.changes || []).slice(0, 4).map((c: any) => `${n(c.before)} → ${n(c.after)}`).join(' · ');
+            const partial = (mod.skipped || []).length > 0;
+            return tr(lang, {
+                ar: `غيّرت ${mod.changedCount ?? 0} من أصل ${mod.requestedCount ?? mod.changedCount ?? 0} منتجات${partial ? `، وبقيت ${mod.skipped.length} خطوة دون تغيير لعدم توفر بديل مناسب` : ''}. ${changes ? `التغييرات: ${changes}. ` : ''}المجموع الجديد ${total} دج.${mod.followupQuestion ? `\n${mod.followupQuestion}\n${(mod.followupOptions || []).map((x: string, i: number) => `${i + 1}. ${x}`).join('\n')}` : ''}`, 
+                fr: `${mod.changedCount ?? 0} produit(s) remplacé(s) sur ${mod.requestedCount ?? mod.changedCount ?? 0}${partial ? ` ; ${mod.skipped.length} étape(s) conservée(s), faute d’alternative adaptée` : ''}. ${changes ? `Changements : ${changes}. ` : ''}Nouveau total : ${total} DA.${mod.followupQuestion ? `\n${mod.followupQuestion}\n${(mod.followupOptions || []).map((x: string, i: number) => `${i + 1}. ${x}`).join('\n')}` : ''}`, 
+                en: `Replaced ${mod.changedCount ?? 0} of ${mod.requestedCount ?? mod.changedCount ?? 0} products${partial ? `; ${mod.skipped.length} step(s) were kept because no suitable alternative was found` : ''}. ${changes ? `Changes: ${changes}. ` : ''}New total: ${total} DZD.${mod.followupQuestion ? `\n${mod.followupQuestion}\n${(mod.followupOptions || []).map((x: string, i: number) => `${i + 1}. ${x}`).join('\n')}` : ''}`, 
+            });
+        }
+        case 'batch': {
+            const changes = (mod.changes || []).slice(0, 5).map((c: any) => {
+                if (c.action === 'swap' && c.before && c.after) return `${n(c.before)} → ${n(c.after)}`;
+                if (c.action === 'remove' && c.before) return `${n(c.before)} (${tr(lang, { ar: 'حذف', fr: 'supprimé', en: 'removed' })})`;
+                if (c.action === 'add' && c.after) return `${n(c.after)} (${tr(lang, { ar: 'إضافة', fr: 'ajouté', en: 'added' })})`;
+                return c.summary;
+            }).filter(Boolean).join(' · ');
+            return tr(lang, {
+                ar: `نُفذت ${mod.changedCount ?? mod.requestedCount ?? 0} تعديلات. ${changes ? `التفاصيل: ${changes}. ` : ''}المجموع الجديد ${total} دج.${mod.followupQuestion ? `\n${mod.followupQuestion}\n${(mod.followupOptions || []).map((x: string, i: number) => `${i + 1}. ${x}`).join('\n')}` : ''}`, 
+                fr: `${mod.changedCount ?? mod.requestedCount ?? 0} modifications effectuées. ${changes ? `Détails : ${changes}. ` : ''}Nouveau total : ${total} DA.${mod.followupQuestion ? `\n${mod.followupQuestion}\n${(mod.followupOptions || []).map((x: string, i: number) => `${i + 1}. ${x}`).join('\n')}` : ''}`, 
+                en: `${mod.changedCount ?? mod.requestedCount ?? 0} edits completed. ${changes ? `Details: ${changes}. ` : ''}New total: ${total} DZD.${mod.followupQuestion ? `\n${mod.followupQuestion}\n${(mod.followupOptions || []).map((x: string, i: number) => `${i + 1}. ${x}`).join('\n')}` : ''}`, 
+            });
+        }
         default:
             return tr(lang, {
                 ar: mod.summary || `عدّلت الروتين (المجموع ${total} دج).`,
@@ -709,6 +821,156 @@ function potentActiveOf(turn: AgentStateTracker, lang: Lang): { key: string; lab
         }
     }
     return undefined;
+}
+
+// ── deterministic routine extraction ─────────────────────────────────────────
+// Only handles clear, single-focus routine requests. Complex requests (multiple
+// concerns, named products to include/exclude, or ambiguous context) stay on the
+// LLM path so this fast lane does not guess at user intent.
+function inferCabinetRoutineFocus(state: SessionState): { routineType: 'skin' | 'hair'; concern: string } {
+    const items: any[] = (state.userId ? listItems(state.userId) : ((state.lastCabinet as any)?.items || []))
+        .filter((item: any) => !item.status || item.status === 'using');
+    const hairRe = /hair|scalp|shampoo|conditioner|capillary|cheveux|shampoing|cuir\s*chevelu|شعر|فروة|شامبو|بلسم|ماسك\s*شعر/i;
+    const skinRe = /skin|cleanser|sunscreen|serum|toner|lotion|cream|face|peau|visage|nettoyant|solaire|tonique|hydratant|بشر|وجه|غسول|واقي|سيروم|تونر|مرطب|كريم/i;
+    let hairCount = 0;
+    let skinCount = 0;
+    for (const item of items) {
+        const text = `${item.category || ''} ${item.categoryLabel || ''} ${item.name || ''}`;
+        if (hairRe.test(text)) hairCount++;
+        if (skinRe.test(text)) skinCount++;
+    }
+
+    if (hairCount > skinCount && hairCount > 0) {
+        return { routineType: 'hair', concern: state.profile?.hairType || 'العناية الأساسية بالشعر' };
+    }
+    if (skinCount > 0 || hairCount === 0) {
+        const concern = state.profile?.skinType || state.profile?.concerns?.[0] || 'العناية الأساسية';
+        return { routineType: 'skin', concern: /شعر|hair|scalp|cheveux/i.test(concern) ? 'العناية الأساسية' : concern };
+    }
+    return { routineType: 'hair', concern: state.profile?.hairType || 'العناية الأساسية بالشعر' };
+}
+
+function directRoutineArgs(message: string, intent: FastIntent, state: SessionState): Record<string, any> | null {
+    const raw = String(message || '');
+    const useCabinet = /(?:ب|ف)?\s*كل\s+(?:ال)?منتجات\s+(?:ال)?خزان(?:تي|ة)|منتجات\s+(?:ال)?خزانتي|خزانتي|خزانة\s*المنتجات|المنتجات\s*اللي\s*عندي|بما\s*عندي|بما\s*أملك|بالمنتجات\s*(?:اللي|التي)\s*عندي|with\s+what\s+i\s+have|what\s+i\s+own|from\s+my\s+(?:shelf|cabinet)|avec\s+ce\s+que\s+j['’]ai/i.test(raw);
+
+    // Leave reference-sensitive requests to the model: it can resolve the product
+    // in conversation context and set required_products/include_last_product.
+    const needsContextualProduct = /(?:مع\s*(?:هذا|هذ[اه]|المنتج|السيروم|الغسول)|بـ?المنتج\s*(?:هذا|اللي|الذي)|include\s+(?:this|that|the)\s+product|with\s+(?:this|that|the)\s+(?:product|serum|cleanser)|avec\s+(?:ce|cet|cette)\s+produit|the\s+one\s+i\s+(?:mentioned|showed)|المنتج\s*(?:اللي\s*هدرت|السابق))/i.test(raw);
+    if (needsContextualProduct) return null;
+
+    const hairMarker = /شعر|شعري|فروة\s*الرأس|hair|scalp|cheveux|cuir\s*chevelu|capillaire/i.test(raw);
+    const skinMarker = /بشر(?:ة|تي)|جلد|وجه|skin|skincare|face|peau|soin\s+du\s+visage/i.test(raw);
+    if (hairMarker && skinMarker) return null;
+
+    type ConcernRule = { re: RegExp; concern: string; type: 'skin' | 'hair' };
+    const rules: ConcernRule[] = [
+        { re: /حب\s*الشباب|حبوب\s*(?:الوجه|البشرة)|acne|breakouts?|pimples?|acn[eé]ique/i, concern: 'حب الشباب', type: 'skin' },
+        { re: /تصبغ|تصبغات|بقع\s*(?:داكنة|غامقة)|تفتيح|توحيد\s*اللون|dark\s*spots?|hyperpigmentation|brightening|pigmentation|taches\s+(?:brunes|pigmentaires)/i, concern: 'التصبغات', type: 'skin' },
+        { re: /بشرة\s*(?:دهنية|دهنيه)|البشرة\s*الدهنية|جلد\s*دهني|oily\s*skin|greasy\s*skin|peau\s+grasse|peau\s+huileuse/i, concern: 'بشرة دهنية', type: 'skin' },
+        { re: /بشرة\s*(?:جافة|جافه)|البشرة\s*الجافة|جلد\s*جاف|dry\s*skin|peau\s+s[eè]che/i, concern: 'بشرة جافة', type: 'skin' },
+        { re: /بشرة\s*(?:حساسة|حساسه)|البشرة\s*الحساسة|sensitive\s*skin|peau\s+sensible/i, concern: 'بشرة حساسة', type: 'skin' },
+        { re: /بشرة\s*مختلطة|combination\s*skin|peau\s+mixte/i, concern: 'بشرة مختلطة', type: 'skin' },
+        { re: /بشرة\s*(?:ناقصة\s*الترطيب|عطشانة)|dehydrated\s*skin|skin\s+dehydration/i, concern: 'بشرة ناقصة الترطيب', type: 'skin' },
+        { re: /قشرة|القشرة|dandruff|pellicules?/i, concern: 'قشرة الرأس', type: 'hair' },
+        { re: /شعر\s*(?:تالف|متضرر|متقصف)|damaged\s*hair|breakage|cheveux\s+(?:ab[iî]m[eé]s|cassants)/i, concern: 'شعر تالف', type: 'hair' },
+        { re: /شعر\s*(?:جاف|ناشف)|dry\s*hair|cheveux\s+secs/i, concern: 'شعر جاف', type: 'hair' },
+        { re: /شعر\s*(?:مجعد|كيرلي)|curly\s*hair|cheveux\s+boucl[eé]s/i, concern: 'شعر مجعد', type: 'hair' },
+        { re: /فروة\s*(?:الرأس\s*)?الدهنية|فروة\s*رأس\s*دهنية|oily\s*scalp|cuir\s+chevelu\s+gras/i, concern: 'فروة رأس دهنية', type: 'hair' },
+    ];
+    const matched = rules.filter(rule => rule.re.test(raw));
+    // Multiple distinct targets require a deliberate prioritization, so defer to
+    // the model rather than silently dropping a concern.
+    if (matched.length > 1) return null;
+
+    let routineType: 'skin' | 'hair';
+    let targetConcern: string;
+    if (matched.length === 1) {
+        routineType = matched[0].type;
+        targetConcern = matched[0].concern;
+        if ((routineType === 'hair' && skinMarker) || (routineType === 'skin' && hairMarker)) return null;
+    } else if (hairMarker) {
+        routineType = 'hair';
+        targetConcern = 'العناية الأساسية بالشعر';
+    } else if (skinMarker) {
+        routineType = 'skin';
+        targetConcern = state.profile?.skinType || state.profile?.concerns?.[0] || 'العناية الأساسية';
+    } else if (useCabinet) {
+        const inferred = inferCabinetRoutineFocus(state);
+        routineType = inferred.routineType;
+        targetConcern = inferred.concern;
+    } else {
+        return null;
+    }
+
+    const args: Record<string, any> = { target_concern: targetConcern, routine_type: routineType };
+
+    // Prefer the intent router's structured budget, then parse common phrasing.
+    let budget = typeof intent.entities.budget === 'number' && intent.entities.budget > 0
+        ? intent.entities.budget
+        : undefined;
+    if (!budget) {
+        const m = raw.match(/(?:بميزانية|ميزاني(?:تي|ة)|budget(?:\s+of)?|under|below|moins\s+de|maximum|max\.?|أقل\s*من|اقل\s*من|تحت)\s*(\d{3,6})\s*(?:دج|دينار|dzd|dz|da)?/i)
+            || raw.match(/(\d{3,6})\s*(?:دج|دينار|dzd|dz|da)\b/i);
+        if (m) budget = Number(m[1]);
+    }
+    if (budget && Number.isFinite(budget) && budget > 0) args.max_budget = budget;
+
+    if (intent.entities.country) args.country = intent.entities.country;
+    if (intent.entities.brand) args.preferred_brand = intent.entities.brand;
+    if (intent.entities.excludeCategories?.length) args.exclude_categories = intent.entities.excludeCategories;
+
+    if (/\b(?:morning|am)\b|صباح(?:اً|ا)?|الصباح|matin/i.test(raw)) args.time_of_day = 'morning';
+    else if (/\bnight\b|evening|pm\b|مساء|ليلاً|بالليل|nuit|soir/i.test(raw)) args.time_of_day = 'night';
+
+    if (useCabinet) args.use_cabinet = true;
+    return args;
+}
+
+function fmtBuiltRoutine(lang: Lang, out: any, state: SessionState): string {
+    const routine = state.lastRoutine as any;
+    const steps: any[] = Array.isArray(out?.stepsSummary)
+        ? out.stepsSummary
+        : Array.isArray(routine?.steps) ? routine.steps.map((s: any) => ({
+            step: s.stepNumber, name: s.stepName,
+            product: s.product?.name, brand: s.product?.brand,
+            price: `${s.product?.price ?? ''} ${s.product?.currency || 'دج'}`.trim(),
+        })) : [];
+    const money = (n: any) => Number.isFinite(Number(n)) ? Number(n).toLocaleString('en-US') : String(n ?? '—');
+    const total = out?.totalCost ?? routine?.totalCost;
+    const budget = out?.maxBudget ?? routine?.maxBudget;
+    const stepLines = steps.map((s: any) => `• ${s.step}. ${s.name}: ${dn(s.brand, s.product)}${s.price ? ` — ${s.price}` : ''}`);
+    const omitted: string[] = [];
+    if (Array.isArray(out?.requiredNotPlaced) && out.requiredNotPlaced.length) {
+        omitted.push(tr(lang, {
+            ar: `لم أتمكن من إدراج بعض المنتجات المطلوبة: ${out.requiredNotPlaced.map((x: any) => x.name || x.id || 'منتج').join('، ')}.`,
+            fr: `Certains produits demandés n'ont pas pu être inclus : ${out.requiredNotPlaced.map((x: any) => x.name || x.id || 'produit').join(', ')}.`,
+            en: `Some requested products could not be included: ${out.requiredNotPlaced.map((x: any) => x.name || x.id || 'product').join(', ')}.`,
+        }));
+    }
+    if (Array.isArray(out?.skippedByRequest) && out.skippedByRequest.length) {
+        omitted.push(tr(lang, {
+            ar: `استبعدت الخطوات التي طلبت عدم تضمينها: ${out.skippedByRequest.join('، ')}.`,
+            fr: `Étapes exclues selon votre demande : ${out.skippedByRequest.join(', ')}.`,
+            en: `Excluded as requested: ${out.skippedByRequest.join(', ')}.`,
+        }));
+    }
+    const intro = tr(lang, {
+        ar: `جهزت لك روتين ${routine?.routineType === 'hair' ? 'العناية بالشعر' : 'العناية بالبشرة'}${out?.concern || routine?.concern ? ` يركز على ${out?.concern || routine?.concern}` : ''}.`,
+        fr: `J'ai préparé votre routine ${routine?.routineType === 'hair' ? 'capillaire' : 'de soin de la peau'}${out?.concern || routine?.concern ? ` axée sur ${out?.concern || routine?.concern}` : ''}.`,
+        en: `I've prepared your ${routine?.routineType === 'hair' ? 'hair-care' : 'skin-care'} routine${out?.concern || routine?.concern ? ` focused on ${out?.concern || routine?.concern}` : ''}.`,
+    });
+    const totalText = tr(lang, {
+        ar: `التكلفة ${money(total)} دج من ميزانية ${money(budget)} دج (${steps.length || out?.stepsCount || 0} خطوات).`,
+        fr: `Total : ${money(total)} DA sur un budget de ${money(budget)} DA (${steps.length || out?.stepsCount || 0} étapes).`,
+        en: `Total: ${money(total)} DZD out of ${money(budget)} DZD (${steps.length || out?.stepsCount || 0} steps).`,
+    });
+    const cabinetNote = out?.builtAroundCabinet ? tr(lang, {
+        ar: 'اعتمدت على المنتجات التي تستعملها حالياً من خزانتك وأكملت الخطوات الناقصة؛ لا يلزم أن يدخل كل منتج في الروتين إذا لم يناسب إحدى خطواته.',
+        fr: 'La routine reprend les produits de votre armoire actuellement utilisés et complète les étapes manquantes ; tous les produits ne sont pas forcément adaptés à une étape.',
+        en: 'I used the products you currently use from your cabinet and filled missing steps; not every owned item necessarily fits a routine step.',
+    }) : '';
+    return [intro, totalText, cabinetNote, ...stepLines, ...(omitted.length ? omitted : [])].filter(Boolean).join('\n');
 }
 
 // ── deterministic search extraction ──────────────────────────────────────────
@@ -827,10 +1089,16 @@ function fmtDirectSearch(lang: Lang, out: any, args: Record<string, any>): strin
     const relaxed = Array.isArray(out.relaxedFilters) && out.relaxedFilters.length
         ? tr(lang, { ar: ` تنبيه: لم يمكن تحقيق بعض الشروط بالكامل (${out.relaxedFilters.join('، ')}).`, fr: ` Note : certains critères n'ont pas été entièrement satisfaits (${out.relaxedFilters.join(', ')}).`, en: ` Note: some constraints could not be fully satisfied (${out.relaxedFilters.join(', ')}).` }) : '';
     return tr(lang, {
-        ar: `وجدت ${returned} منتجات${found > returned ? ` من أصل ${found} نتيجة` : ''}${criteriaText ? ` وفق معاييرك (${criteriaText})` : ''}. رتّبت النتائج بحسب مدى المطابقة؛ التفاصيل في البطاقات أدناه.`,
-        fr: `${returned} produit(s) trouvé(s)${found > returned ? ` sur ${found} résultats` : ''}${criteriaText ? ` selon vos critères (${criteriaText})` : ''}. Les résultats sont classés par pertinence ; détails dans les cartes ci-dessous.`,
-        en: `Found ${returned} product(s)${found > returned ? ` out of ${found} matches` : ''}${criteriaText ? ` for (${criteriaText})` : ''}. Results are ranked by relevance; details are in the cards below.`,
-    }) + more + relaxed;
+        ar: out.rankingMode === 'wathiq_oilGuardScore_desc'
+            ? `وجدت ${returned} منتجات${found > returned ? ` من أصل ${found} نتيجة مطابقة` : ''}${criteriaText ? ` وفق معاييرك (${criteriaText})` : ''}. قيّمت المرشحين بمحرك وثيق ورتّبت النتائج حسب درجة التقييم الفعلية؛ التفاصيل في البطاقات أدناه.`
+            : `وجدت ${returned} منتجات${criteriaText ? ` وفق معاييرك (${criteriaText})` : ''}. تعذّر الحصول على درجات تقييم صالحة لبعض أو كل المرشحين، لذا أوضحت ذلك بدل ادعاء ترتيبهم حسب الفعالية. التفاصيل في البطاقات أدناه.`,
+        fr: out.rankingMode === 'wathiq_oilGuardScore_desc'
+            ? `${returned} produit(s) trouvé(s)${found > returned ? ` sur ${found} correspondances` : ''}${criteriaText ? ` selon vos critères (${criteriaText})` : ''}. Les candidats ont été évalués par Wathiq et classés selon leur score réel ; détails dans les cartes ci-dessous.`
+            : `${returned} produit(s) trouvé(s)${criteriaText ? ` selon vos critères (${criteriaText})` : ''}. Les scores Wathiq n'étaient pas disponibles pour tous les candidats ; le classement ne prétend donc pas mesurer leur efficacité.`,
+        en: out.rankingMode === 'wathiq_oilGuardScore_desc'
+            ? `Found ${returned} product(s)${found > returned ? ` out of ${found} matching results` : ''}${criteriaText ? ` for (${criteriaText})` : ''}. Candidates were evaluated by Wathiq and ranked by their actual evaluation score; details are in the cards below.`
+            : `Found ${returned} product(s)${criteriaText ? ` for (${criteriaText})` : ''}. Valid Wathiq evaluation scores were unavailable for some or all candidates, so the results are not presented as an efficacy ranking.`,
+    }) + (out.fallbackMessage ? `\n${out.fallbackMessage}` : '') + more + relaxed;
 }
 
 // ── the dispatcher ───────────────────────────────────────────────────────────
@@ -840,24 +1108,7 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
     if (!message || message.length > 600) return null;
 
     const runTool = (name: string, args: any) => {
-        const statuses: Record<string, string> = {
-            search_products: '🔍 جاري البحث في كتالوج المنتجات...',
-            evaluate_product: '🧪 جاري فحص وتحليل التركيبة مع OilGuard...',
-            evaluate_brand: '🏷️ جاري تحليل منتجات الماركة...',
-            get_product: '📋 جاري استرجاع تفاصيل المنتج ومكوناته...',
-            build_routine: '🧴 جاري تكوين روتين عناية متكامل...',
-            get_products_details: '📋 جاري استرجاع مكونات المنتجات...',
-            get_community_reviews: '💬 جاري فحص تجارب وآراء المستخدمين...',
-            compare_products: '⚖️ جاري المقارنة بين المنتجات...',
-            check_ingredient_list: '🧫 جاري تحليل قائمة المكونات...',
-            product_contains: '🔎 جاري فحص القائمة الكاملة للمكونات...',
-            find_alternatives: '🔁 جاري البحث عن بدائل...',
-            check_compatibility: '🧬 جاري فحص التوافق...',
-            modify_routine: '✏️ جاري تعديل الروتين...',
-            generate_usage_schedule: '🗓️ جاري إعداد جدول الاستخدام...',
-            triage_reaction: '🩺 جاري تحليل تفاعل البشرة...',
-        };
-        input.emitStatus?.(statuses[name] || '⚙️ جاري تنفيذ الخطوة المطلوبة...');
+        emitToolStatus(name, input.emitStatus);
         return run(tools, name, args);
     };
 
@@ -867,6 +1118,8 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
 
     /** Streams the final text; appends ONE next-step offer and the welcome-back note. */
     const finish = (text: string, tool: string, next?: NextStep | null): FastLaneResult => {
+        // Every fast-lane path uses the same finalization phase as the LLM path.
+        input.emitStatus?.(STATUS.FORMULATING);
         let out = text;
         if (PROACTIVE && next) {
             if (!/[.!؟?👇]\s*$/.test(out)) out += '.';
@@ -891,7 +1144,7 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
     const offer = state.pendingOffer;
     if (offer && offer.turn === state.turnCount - 1 && isAffirmative(message)) {
         state.pendingOffer = null;
-        input.emitStatus?.('✨ ...');
+        input.emitStatus?.(STATUS.FORMULATING);
 
         // Contribute-to-catalog: no tool — straight to the moderation queue.
         if (offer.tool === 'submit_contribution') {
@@ -901,7 +1154,7 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
                     { brand: ls.brand, name: ls.name, category: ls.category, ingredients: ls.ingredients, quantity: ls.quantity },
                     state.userId || 'anon'
                 );
-                if (r.ok) {
+                if (r.ok === true) {
                     return finish(tr(lang, {
                         ar: r.duplicate ? 'هذا المنتج مقترح سابقاً وهو قيد المراجعة، شكراً لك!' : 'شكراً! أرسلته للمراجعة، وبعد التأكد منه سيُضاف للكتالوج.',
                         fr: r.duplicate ? 'Ce produit est déjà proposé et en cours de modération, merci !' : 'Merci ! Envoyé en modération ; il sera ajouté au catalogue après vérification.',
@@ -966,7 +1219,7 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
                 const out = await runTool('evaluate_product', { productId: cands[0].id });
                 if (out && typeof out.oilGuardScore === 'number') {
                     emitCardForTool('evaluate_product', turnState, input.emitCard);
-                    return finish(sorry + fmtEvaluate(lang, out, turnState, state), 'evaluate_product', nextStepFor('evaluate_product', { out, state, productId: cands[0].id, potentActive: potentActiveOf(turnState, lang) }));
+                    return finish(sorry + fmtEvaluate(lang, out, turnState, state, message), 'evaluate_product', nextStepFor('evaluate_product', { out, state, productId: cands[0].id, potentActive: potentActiveOf(turnState, lang) }));
                 }
             } else if (cands.length >= 1) {
                 const out = await runTool('search_products', { brand: cands[0].brand, category: cat });
@@ -987,6 +1240,34 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
         return null;     // anything else → LLM path (with the CORRECTION hint)
     }
 
+    // Deterministic cabinet follow-ups reuse context instead of spending another model round-trip.
+    const cabinetListFollowup = /^(?:وريهملي\s*(?:قع|كامل|كاملين)?|ورينيهم\s*(?:قع|كامل)?|وريهم\s*(?:قع|كامل)?|اعرضهم\s*(?:قع|كامل)?|show\s+(?:them\s+)?all|list\s+them\s+all|show\s+all|les\s+montrer\s+tous?)$/i.test(folded.trim());
+    if (cabinetListFollowup && state.lastCabinet && state.userId) {
+        const out = await runTool('manage_cabinet', { action: 'list' });
+        if (out) {
+            emitCardForTool('manage_cabinet', turnState, input.emitCard);
+            return finish(fmtCabinet(lang, 'list', out), 'manage_cabinet');
+        }
+    }
+
+    // An explicit sunscreen-selection request has a deterministic category and can be searched directly.
+    const sunscreenToAdd = /(?:واقي\s*(?:(?:ال)?شمس|شمسي)|sunscreen|sun\s*screen|ecran\s*solaire|\bSPF\b).*(?:نزيد|نضيف|نختار|نحط|نشرى|نشتري|add|choose|pick|buy|ajouter|choisir)|(?:نزيد|نضيف|نختار|نحط|نشرى|نشتري|add|choose|pick|buy|ajouter|choisir).*(?:واقي\s*(?:(?:ال)?شمس|شمسي)|sunscreen|sun\s*screen|ecran\s*solaire|\bSPF\b)/i.test(message);
+    if (sunscreenToAdd) {
+        const ownedIds = state.userId
+            ? listItems(state.userId).filter((it: any) => it.status === 'using' && it.productId).map((it: any) => it.productId)
+            : [];
+        const args: Record<string, any> = { category: 'sunscreen', limit: 5 };
+        if (state.profile?.skinType) args.skin_type = state.profile.skinType;
+        if (state.profile?.budgetMax) args.max_price = state.profile.budgetMax;
+        if (ownedIds.length) args.exclude_product_ids = ownedIds;
+        const out = await runTool('search_products', args);
+        if (out && typeof out.returnedCount === 'number') {
+            if (out.returnedCount > 0) emitCardForTool('search_products', turnState, input.emitCard);
+            return finish(fmtDirectSearch(lang, out, args), 'search_products');
+        }
+    }
+
+
     // ── 0. Deterministic search follow-ups (no router signal needed) ─────────
     const refinement = state.lastSearchArgs
         ? buildSearchRefinement(message, state.lastSearchArgs, state.lastSearchNextOffset)
@@ -1000,7 +1281,6 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
             });
             return finish(text, 'search_products');
         }
-        input.emitStatus?.('🔍 ...');
         const out = await runTool('search_products', refinement.args);
         if (out && out.returnedCount > 0 && !(out.relaxedFilters || []).length) {
             emitCardForTool('search_products', turnState, input.emitCard);
@@ -1026,6 +1306,53 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
                 return finish(fmtDirectSearch(lang, out, args), 'search_products');
             }
 
+            // ── build a clear, single-focus routine without an LLM round-trip ──
+            case 'build_routine': {
+                const args = directRoutineArgs(message, intent, state);
+                if (!args) return null;
+                if (args.use_cabinet && !state.userId) {
+                    return finish(tr(lang, {
+                        ar: 'باش نبني الروتين انطلاقاً من منتجات خزانَتك، لازم تدخل لحسابك حتى نقدر نقرأ المنتجات المحفوظة. ما بنيتش روتيناً عاماً بدل ذلك.',
+                        fr: 'Pour construire la routine à partir de votre armoire, connectez-vous afin que je puisse lire vos produits enregistrés. Je n’ai pas remplacé cela par une routine générique.',
+                        en: 'To build a routine from your cabinet, sign in so I can read your saved products. I have not substituted a generic routine.',
+                    }), 'build_routine');
+                }
+                if (args.use_cabinet && state.userId) {
+                    // Do not silently claim to build from a cabinet when there are no
+                    // currently-used catalog products that the routine engine can seed.
+                    const usableCabinetItems = listItems(state.userId).filter((item: any) => item.status === 'using' && item.productId);
+                    if (usableCabinetItems.length === 0) {
+                        return finish(tr(lang, {
+                            ar: 'لم أجد في خزانتك منتجات محفوظة ومعلّمة بأنها قيد الاستعمال ويمكن ربطها بالكتالوج. أضف المنتجات التي تستعملها، أو اطلب مني بناء روتين عادي من الكتالوج.',
+                            fr: 'Je n’ai trouvé aucun produit du catalogue marqué comme actuellement utilisé dans votre armoire. Ajoutez vos produits en cours d’utilisation, ou demandez une routine classique depuis le catalogue.',
+                            en: 'I couldn’t find any catalog-linked products marked as currently in use in your cabinet. Add the products you use, or ask me to build a regular catalog-based routine.',
+                        }), 'build_routine');
+                    }
+                }
+                const routineTool = tools['build_routine'];
+                if (typeof routineTool?.execute !== 'function') return null;
+                emitToolStatus('build_routine', input.emitStatus);
+                let out: any;
+                const routineStartedAt = Date.now();
+                if (process.env.AGENT_DEBUG !== 'false') console.log('[FAST][TOOL_START] build_routine');
+                try {
+                    out = await routineTool.execute(args, { toolCallId: 'fast_build_routine', messages: [] });
+                } catch (error: any) {
+                    console.warn(`[FAST][TOOL_ERROR] build_routine durationMs=${Date.now() - routineStartedAt} message=${error?.message || error}`);
+                    return null;
+                }
+                if (process.env.AGENT_DEBUG !== 'false') console.log(`[FAST][TOOL_DONE] build_routine durationMs=${Date.now() - routineStartedAt} result=${out?.error ? 'error' : 'ok'}`);
+                if (!out) break;
+                if (out.error) {
+                    // Do not call the same failing tool again via the LLM path.
+                    const errorText = String(out.error);
+                    return finish(errorText, 'build_routine');
+                }
+                if (!Array.isArray(out.stepsSummary) || out.stepsSummary.length === 0) break;
+                emitCardForTool('build_routine', turnState, input.emitCard);
+                return finish(fmtBuiltRoutine(lang, out, state), 'build_routine');
+            }
+
             // ── evaluate one product ─────────────────────────────────────────
             case 'evaluate_product': {
                 // signed-in: the product is already on the user's shelf with a stored analysis → answer instantly
@@ -1038,12 +1365,25 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
                     }
                 }
                 const target = await resolveProductTarget(message, state);
-                if (!target) return null;
+                if (!target) {
+                    // A decisive evaluation request should not fall into another
+                    // LLM tool-selection round just because the product name is
+                    // ambiguous or the supplied ID is not in this catalog.
+                    // Ask for an exact selection instead of guessing or waiting.
+                    if (intent.confidence === 'high' && intent.likelyTools[0] === 'evaluate_product') {
+                        return finish(tr(lang, {
+                            ar: 'لم أتمكن من تحديد منتج واحد بشكل موثوق في كتالوج وثيق. أرسل معرّف المنتج الصحيح أو اختره من نتائج البحث، وسأحلّله مباشرة.',
+                            fr: 'Je n’ai pas pu identifier un produit unique dans le catalogue Wathiq. Envoyez son identifiant exact ou choisissez-le dans les résultats, et je lancerai l’analyse directement.',
+                            en: 'I couldn’t uniquely identify a product in Wathiq’s catalog. Send its exact product ID or select it from search results, and I’ll evaluate it directly.',
+                        }), 'evaluate_product');
+                    }
+                    return null;
+                }
                 const out = await runTool('evaluate_product', { productId: target.id });
                 if (!out || typeof out.oilGuardScore !== 'number') break;
                 emitCardForTool('evaluate_product', turnState, input.emitCard);
                 const cabNote = cabinetNote(lang, state, turnState, target.id);
-                return finish(fmtEvaluate(lang, out, turnState, state) + (cabNote ? ' ' + cabNote : ''), 'evaluate_product', nextStepFor('evaluate_product', { out, state, productId: target.id, potentActive: potentActiveOf(turnState, lang) }));
+                return finish(fmtEvaluate(lang, out, turnState, state, message) + (cabNote ? ' ' + cabNote : ''), 'evaluate_product', nextStepFor('evaluate_product', { out, state, productId: target.id, potentActive: potentActiveOf(turnState, lang) }));
             }
 
             // ── brand verdict (single-brand, non-compound) ───────────────────
@@ -1206,12 +1546,27 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
                         en: 'Your personal cabinet needs an account — sign in (or enable "save my products") and I\'ll add it.',
                     }), 'manage_cabinet');
                 }
-                const hasCtx = !!(state.lastProduct?.id || state.lastAnalysis?.productId);
+                const recentResults: any[] = state.lastProductResults || [];
+                const normalizedMessage = normalizeArabicText(message).toLowerCase();
+                const explicitRecentMatches = recentResults.filter((product: any) => {
+                    const brand = normalizeArabicText(String(product?.brand || '')).toLowerCase();
+                    const name = normalizeArabicText(String(product?.name || '')).toLowerCase();
+                    return (brand.length >= 2 && normalizedMessage.includes(brand))
+                        || (name.length >= 4 && normalizedMessage.includes(name));
+                });
+                const recentMatch = explicitRecentMatches.length === 1 ? explicitRecentMatches[0] : null;
+                // For an explicit add request, never let an older lastProduct override
+                // the product name the user just typed. Multiple matching results stay
+                // ambiguous and are intentionally delegated to the model for clarification.
+                const contextualId = cmd.action === 'add'
+                    ? (explicitRecentMatches.length > 0 ? recentMatch?.id : (state.lastProduct?.id || state.lastAnalysis?.productId))
+                    : (state.lastProduct?.id || state.lastAnalysis?.productId);
+                const hasCtx = !!contextualId;
                 let args: any;
                 if (cmd.action === 'list') args = { action: 'list' };
-                else if (!hasCtx) return null;                       // which product? → LLM asks
+                else if (!hasCtx) return null;                       // ambiguous product -> ask safely
                 else if (cmd.action === 'remove') args = { action: 'remove' };
-                else if (cmd.action === 'add') args = { action: 'add' };
+                else if (cmd.action === 'add') args = { action: 'add', ...(recentMatch?.id ? { product_id: recentMatch.id } : {}) };
                 else args = { action: 'update', status: cmd.status, verdict: cmd.verdict };
                 const out = await runTool('manage_cabinet', args);
                 if (!out) break;
@@ -1236,9 +1591,11 @@ export async function tryFastLane(input: FastLaneInput): Promise<FastLaneResult 
             case 'modify_routine': {
                 if (!state.lastRoutine) return null;
                 const edit = parseRoutineEdit(message);
-                if (!edit) return null;
+                if (!edit || edit.needs_llm) return null;
                 const out = await runTool('modify_routine', edit);
-                if (!out || !out.modification) break;
+                if (!out) break;
+                if (out.needsFollowup) return finish(fmtRoutineEdit(lang, out), 'modify_routine');
+                if (!out.modification) break;
                 emitCardForTool('modify_routine', turnState, input.emitCard);
                 return finish(fmtRoutineEdit(lang, out), 'modify_routine', nextStepFor('modify_routine', { out, state }));
             }

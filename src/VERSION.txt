@@ -1,0 +1,3 @@
+Wathiq Agent v6.5.1
+Release date: 2026-10-17
+Patch: compact analysis result; notes, personal match, plus/minus factors, claims and ingredient evidence are presented in separate collapsed accordions. Score math and numeric scoreBreakdown values are hidden. Also fixes prompt.ts unescaped-backtick syntax issue.

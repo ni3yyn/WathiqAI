@@ -5,6 +5,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import { WATHIQ_SYSTEM_PROMPT } from './prompt';
 import { searchProducts, SearchProductsArgs } from './tools/searchProducts';
+import { createStatusReporter, emitToolStatus, STATUS } from './statuses';
 import { getProduct, GetProductArgs } from './tools/getProduct';
 import { getProductsDetails } from './tools/getProductsDetails';
 import { evaluateProduct, EvaluateProductArgs } from './tools/evaluateProduct';
@@ -55,7 +56,7 @@ import {
     LONGTERM_ENABLED, loadFacts, saveFacts, forgetUser, extractDurableFacts, applyFactsToProfile,
     describeFacts, FORGET_RE,
 } from './longterm';
-import { normalizeCountry, normalizeArabicText, normalizeCategory, detectCategoryInText, reloadLearnedAliasesIfChanged } from './taxonomy';
+import { normalizeCountry, normalizeArabicText, normalizeCategory, detectCategoryInText, reloadLearnedAliasesIfChanged, isProductJudgmentIntent, isContextOnlyProductJudgment } from './taxonomy';
 import { norm } from './tools/getProduct';
 import { normalizeProductType } from './tools/evaluateProduct';
 import { getProducts, evaluateProduct as wathiqEvaluate } from '../wathiq/backendClient';
@@ -127,8 +128,8 @@ export interface ChatRequest {
     rememberMe?: boolean;
     /**
      * Photos attached to this message (pack front / ingredient list). Accepts
-     * data: URLs, {data, mimeType, role} objects, or https URLs on the
-     * SCAN_ALLOWED_HOSTS allow-list. Triggers the scan lane (vision OCR →
+     * data: URLs, {base64, mimeType, role} (or legacy {data, mimeType}) objects,
+     * or HTTPS URLs on the SCAN_ALLOWED_HOSTS allow-list. Triggers the scan lane (vision OCR →
      * catalog match → OilGuard verdict).
      */
     images?: Array<ChatImage | string>;
@@ -139,25 +140,11 @@ export interface ChatRequest {
     authenticated?: boolean;
 }
 
+// Kept as a convenience for any provider-adapter code that needs a standalone
+// key selection. Request handlers below create one immutable key order per user
+// message and pass it through every model attempt in that turn.
 function getNextGeminiApiKey(): string | undefined {
-    const rawKeys = process.env.GEMINI_API_KEYS || process.env.GOOGLE_API_KEYS || '';
-    const keys = rawKeys
-        .split(',')
-        .map(k => k.replace(/['"\s]/g, '').trim())
-        .filter(Boolean);
-
-    // If numbered keys exist (GEMINI_API_KEY_1, GEMINI_API_KEY_2...)
-    for (let i = 1; i <= 20; i++) {
-        const k = process.env[`GEMINI_API_KEY_${i}`];
-        if (k && k.trim()) keys.push(k.replace(/['"\s]/g, '').trim());
-    }
-
-    if (keys.length === 0) {
-        return process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY;
-    }
-
-    // Pick a random key from your pool for each chat turn to distribute traffic!
-    return keys[Math.floor(Math.random() * keys.length)];
+    return getGeminiApiKeys()[0] || undefined;
 }
 
 function extractContextHints(conversation?: ChatMessage[]): string[] {
@@ -203,9 +190,10 @@ function extractContextHints(conversation?: ChatMessage[]): string[] {
 // INTENT ROUTER — pre-model heuristic classifier
 // ============================================================================
 //
-// Runs on every turn BEFORE the model sees the message. Pure regex, ~0.1ms.
-// Its sole job is to shorten the model's first reasoning hop on unambiguous
-// messages by pre-loading the likely intent + extracted entities as a hint.
+// Runs on every turn BEFORE the model sees the message. It combines multilingual
+// intent signals, taxonomy normalization, negative-intent guards, and session
+// entity resolution. Its job is to shorten the first reasoning hop for decisive
+// messages without guessing product identities or overriding specialized intents.
 //
 // CRITICAL DESIGN PRINCIPLE — "inform, don't gate":
 //   • The router NEVER removes a tool from the model's view. All tools always
@@ -358,8 +346,13 @@ export function classifyIntent(
     // (with focus_category so the category verdict is data-backed) plus
     // search_products for the brand's products in that category.
     const hasSpecificityMarker = /specifically|خصوصاً|خصوصا|بالتحديد|بالضبط|en\s*particulier|spécifiquement|specifiquement/i.test(msg);
-    const isCompoundBrandCategory = (hasBrandWord || hasOpinion) && !!categoryMention
-        && (hasSpecificityMarker || /[?؟].*(?:their|تاعهم|حقهم|ديالهم|ليهم|منتجاتهم|their)\w*/i.test(msg) || msg.includes('?') || msg.includes('؟'));
+    const hasBrandProductScopeExpansion = hasSpecificityMarker
+        || /(?:their|تاعهم|حقهم|ديالهم|ليهم|منتجاتهم|منتجات\s+الماركة|produits\s+de\s+la\s+marque)/i.test(msg);
+    // A product title often contains a category word ("Alpha Serum?"). A question
+    // mark alone is NOT evidence of a compound brand+category request. Require
+    // an explicit scope expansion such as "their sunscreen specifically".
+    const isCompoundBrandCategory = !!categoryMention && hasBrandProductScopeExpansion
+        && (hasBrandWord || hasOpinion);
 
     if (isCompoundBrandCategory && !unknownRe.test(msg)) {
         signals.push({
@@ -406,18 +399,31 @@ export function classifyIntent(
             note: 'explicit brand-level query',
         });
     } else if (hasOpinion && !unknownRe.test(msg) && !isCompoundBrandCategory && !evalWordRe.test(msg)) {
-        // Opinion phrasing without the word "brand" — could be a brand OR a
-        // product. Offer both; the model arbitrates with context.
-        signals.push({
-            tool: 'evaluate_brand',
-            weight: 62,
-            note: 'opinion question, no explicit "brand" word — use if the named entity is a BRAND',
-        });
-        signals.push({
-            tool: 'evaluate_product',
-            weight: 58,
-            note: 'opinion question — use if the named entity is a single PRODUCT',
-        });
+        // Resolve opinion questions against known entities before asking an LLM to
+        // arbitrate. Deictic language such as "what do you think of this?" resolves
+        // to the current product; an unresolved name such as "Venus" stays ambiguous.
+        const resolvedOpinionProduct = resolveProductReference(raw, state)?.product;
+        const hasCurrentProduct = !!(state.lastProduct?.id || state.lastAnalysis?.productId);
+        const pointsAtCurrentProduct = /(?:\b(?:it|this|that|this one|that one)\b|\bworth(?:\s+buying)?\b|هاذا|هذا|هذي|هادي|فيه|فيها|عليه|عليها|تاعو|تاعها|منه|منها|هذاك|هذيك)/i.test(msg)
+            || (hasCurrentProduct && isProductJudgmentIntent(raw) && isContextOnlyProductJudgment(raw) && !resolvedOpinionProduct?.id);
+        if (resolvedOpinionProduct?.id || (hasCurrentProduct && pointsAtCurrentProduct && !hasBrandWord)) {
+            signals.push({
+                tool: 'evaluate_product',
+                weight: 99,
+                note: 'opinion/judgment resolves to the current product — evaluate the product directly',
+            });
+        } else {
+            signals.push({
+                tool: 'evaluate_brand',
+                weight: 62,
+                note: 'opinion question, no explicit "brand" word — use if the named entity is a BRAND',
+            });
+            signals.push({
+                tool: 'evaluate_product',
+                weight: 58,
+                note: 'opinion question — use if the named entity is a single PRODUCT',
+            });
+        }
     }
 
     // ── Product comparison ("compare X and Y", "قارن بينهما", "أيهما أفضل") ──
@@ -676,6 +682,60 @@ export function classifyIntent(
         }
     }
 
+    // ─── Evidence-based evaluation routing ──────────────────────────────────
+    // The taxonomy resolves product/category/ingredient vocabulary; the weighted
+    // router resolves the action. When the user explicitly asks to evaluate a
+    // product, don't let incidental category/skin-type words downgrade that action
+    // from high confidence. Keep specialized safety and ingredient questions in
+    // control, and never reinterpret raw INCI-list checks as product evaluation.
+    const hasRawInciPayload = (raw.match(/[,،;]/g) || []).length >= 2
+        && /(?:aqua|water|ingredients?|inci|composition|تركيبة|المكونات|مكونات)/i.test(raw);
+    const specializedIntentPresent = signals.some(s =>
+        ['triage_reaction', 'check_compatibility', 'product_contains', 'check_ingredient_list', 'find_actives_dupe', 'list_unknown_ingredients', 'evaluate_brand', 'build_routine', 'modify_routine'].includes(s.tool)
+        && s.weight >= 85
+    );
+    const resolvedJudgmentProduct = resolveProductReference(raw, state)?.product?.id;
+    const hasCurrentJudgmentProduct = !!(state.lastProduct?.id || state.lastAnalysis?.productId);
+    // For named products phrased as judgments ("is Alpha Serum any good?"),
+    // strip action wording and generic category/skin descriptors. The remaining
+    // distinctive label can be passed to Fast Lane's strict catalog resolver.
+    // Category-only questions such as "what do you think about sunscreen?" leave
+    // no candidate product label and must not borrow an unrelated prior product.
+    const judgmentLabel = normalizeArabicText(raw)
+        .replace(/\b(?:what|do|does|you|your|think|opinion|thoughts|about|of|is|are|can|could|would|should|i|it|this|that|one|the|a|an|any|good|worth|buying|buy|effective|works?|safe|suitable|recommend(?:ed)?|trust|worthwhile|price|how|much|est|ce|que|vaut|le|coup|bon|bonne|efficace|conseille|recommande|produit|product|skin|face|oily|dry|sensitive|acne|brightening|serum|cleanser|sunscreen|sunblock|spf|toner|cream|moisturizer|moisturiser|shampoo|lotion|mask|gel|body|hair)\b/gi, ' ')
+        .replace(/(?:وش|واش|شنو|رايك|رأيك|فيه|فيها|في هذا|في هذي|هل|هو|هذا|هذي|هادي|المنتج|المنتجات|مليح|باهي|يسوى|يستاهل|ينفع|ينصح به|تنصحني بيه|بشرة|البشرة|دهنية|جافة|حساسة|مختلطة|واقي الشمس|واقي شمسي|غسول|سيروم|تونر|مرطب|كريم|شامبو|للوجه|للشعر)/g, ' ')
+        .replace(/[؟?!.,،;:()[\]{}"'’`]/g, ' ')
+        .replace(/\s+/g, ' ').trim();
+    const knownBrandsForRouting = ['venus', 'the ordinary', 'loreal', 'l oreal', 'la roche posay', 'cerave', 'bioderma', 'nivea', 'eucerin', 'vichy', 'dove', 'olay', 'avon', 'cetaphil', 'neutrogena', 'cosrx', 'farmasi', 'nuxe', 'garnier', 'isdin'];
+    const isKnownBrandOnly = knownBrandsForRouting.some(name => normalizeArabicText(name) === judgmentLabel);
+    const hasNamedJudgmentTarget = judgmentLabel.split(/\s+/).some(token => token.length > 1 && !/^\d+$/.test(token)) && !isKnownBrandOnly;
+    const contextualJudgment = isProductJudgmentIntent(raw)
+        && !!(resolvedJudgmentProduct || (hasCurrentJudgmentProduct && isContextOnlyProductJudgment(raw)) || hasNamedJudgmentTarget)
+        && !hasBrandWord
+        && !unknownRe.test(msg)
+        && !hasRawInciPayload
+        && !hints.compound
+        && !specializedIntentPresent;
+    const explicitProductEvaluation = (evalWordRe.test(msg) || contextualJudgment)
+        && !hasBrandWord
+        && !unknownRe.test(msg)
+        && !hasRawInciPayload
+        && !hints.compound
+        && !specializedIntentPresent;
+    if (explicitProductEvaluation) {
+        const existingEval = signals.find(s => s.tool === 'evaluate_product');
+        if (existingEval) {
+            existingEval.weight = Math.max(existingEval.weight, 99);
+            existingEval.note = 'explicit product evaluation: execute Wathiq evaluation directly, then narrate the completed report';
+        } else {
+            signals.push({
+                tool: 'evaluate_product',
+                weight: 99,
+                note: 'explicit product evaluation: execute Wathiq evaluation directly, then narrate the completed report',
+            });
+        }
+    }
+
     // ─── Rank signals and decide whether to speak ───
     // Several regexes can describe the same tool. Without deduplication, a
     // second copy is mistaken for a competing intent and downgrades a clear
@@ -698,7 +758,8 @@ export function classifyIntent(
     const second = uniqueSignals[1];
 
     // Confidence: high only if top is strong AND there's no close competitor.
-    const isDecisive = top.weight >= 85 && (!second || top.weight - second.weight >= 20);
+    const isDecisive = (explicitProductEvaluation && top.tool === 'evaluate_product')
+        || (top.weight >= 85 && (!second || top.weight - second.weight >= 20));
     const isLikely = top.weight >= 60;
 
     hints.likelyTools = uniqueSignals.slice(0, 3).map(s => s.tool);
@@ -768,23 +829,40 @@ function formatHintForModel(hint: IntentHint): string {
  * failure mode, which is why it's still the preferred long-term fix.
  */
 function deriveSessionKey(request: ChatRequest): string {
-    if (request.sessionId) return request.sessionId;
+    // An explicit session ID is authoritative and should be echoed by the client
+    // on every turn. This is the only robust option if the client trims history.
+    if (typeof request.sessionId === 'string' && request.sessionId.trim()) {
+        return request.sessionId.trim();
+    }
 
-    // On turn 1 there's no conversation history yet, so anchor on the current
-    // message instead. From turn 2 onward, conversation[0].content will BE that
-    // same turn-1 message (assuming the client keeps prepending history rather
-    // than dropping early messages), so the derived key matches across turns.
-    // Anchoring turn 1 on crypto.randomUUID() instead would generate a key that
-    // can never be recovered later — exactly the bug that lost a routine built
-    // on message 1 the moment message 2 asked about it.
-    const anchor = (request.conversation && request.conversation.length > 0)
-        ? request.conversation[0]?.content
-        : request.message;
+    // Legacy-client fallback:
+    // Do NOT anchor on conversation[0] blindly. The first item can be an assistant
+    // greeting or another non-user message, while turn 1 may have had no history
+    // and therefore been keyed from request.message. That creates a new SessionState
+    // on turn 2, losing lastRoutine and other session-scoped context.
+    //
+    // Instead, use the earliest user message in the conversation. On turn 1, when
+    // history is absent (or contains only an assistant greeting), use this message.
+    // On later turns, the same first user message remains the stable anchor as long
+    // as the client sends the conversation history.
+    const firstUserMessage = Array.isArray(request.conversation)
+        ? request.conversation.find((msg: any) =>
+            msg?.role === 'user' &&
+            typeof msg.content === 'string' &&
+            msg.content.trim().length > 0
+        )?.content
+        : undefined;
+
+    const anchor = (typeof firstUserMessage === 'string' && firstUserMessage.trim())
+        ? firstUserMessage.trim()
+        : request.message?.trim();
 
     if (anchor) {
         return 'anon-' + crypto.createHash('sha256').update(anchor).digest('hex').slice(0, 32);
     }
 
+    // Empty messages should be rare, but avoid accidentally sharing all empty
+    // requests under one key.
     return crypto.randomUUID();
 }
 
@@ -948,7 +1026,7 @@ function autofillEvaluateProfile(args: any, state: SessionState): any {
     return out;
 }
 
-function createAgentTools(state: SessionState, turnState: AgentStateTracker, userMessage: string, sessionId: string) {
+function createAgentTools(state: SessionState, turnState: AgentStateTracker, userMessage: string, sessionId: string, onStatus?: (status: string) => void) {
     return {
         search_products: tool({
             description: 'Search for cosmetics in Wathiq catalog. Supports ingredients, skin/hair conditions in any language (English/French/Arabic/Darija), marketing claims, price limits, country of origin, ingredient EXCLUSIONS, and sorting. Re-call with offset for "show me more".',
@@ -969,13 +1047,13 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                 cheaper_than_price: z.number().optional().describe('Find products strictly cheaper than this price in DZD.'),
                 cheaper_than_product_id: z.string().optional().describe('Product ID of the reference product to beat on price.'),
                 sort_by: z.enum(['price_asc', 'price_desc', 'relevance']).optional().describe('Sort order e.g. price_asc for cheapest options.'),
-                limit: z.number().optional().describe('Max results (default 10)'),
+                limit: z.number().optional().describe('Max results to return (hard cap 5; ordered by Wathiq evaluation score when available)'),
                 offset: z.number().optional().describe('Skip the first N results. For "show me more / المزيد / غيرهم", pass the nextOffset returned by your previous search_products call.')
             }),
             execute: async (args: any) => {
                 try {
                     const filledArgs = autofillSearchArgs(args, state, userMessage);
-                    const result = await searchProducts(filledArgs);
+                    const result = await searchProducts(filledArgs, { onStatus });
 
                     // Remember the MODEL-FACING args (not the profile-autofilled
                     // ones, which are re-applied on every call) so deterministic
@@ -1012,16 +1090,23 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                     return {
                         foundCount: result.foundCount,
                         returnedCount: result.returnedCount,
-                        fallbackMessage: result.fallbackMessage,
                         appliedFilters: (result as any).appliedFilters,
                         relaxedFilters: (result as any).relaxedFilters,
                         hasMore: (result as any).hasMore,
                         nextOffset: (result as any).nextOffset,
-                        productsSummary: result.products.slice(0, 4).map(p => ({
+                        rankingMode: (result as any).rankingMode,
+                        evaluatedCount: (result as any).evaluatedCount,
+                        evaluationCandidateLimit: (result as any).evaluationCandidateLimit,
+                        fallbackMessage: (result as any).fallbackMessage,
+                        productsSummary: result.products.slice(0, 5).map((p: any) => ({
+                            rank: p.rank,
                             id: p.id,
                             brand: p.brand,
                             name: p.name,
-                            price: `${p.price} ${p.currency}`
+                            price: `${p.price} ${p.currency}`,
+                            evaluationScore: p.evaluationScore,
+                            evaluationVerdict: p.evaluationVerdict,
+                            evaluationStatus: p.evaluationStatus,
                         }))
                     };
                 } catch (err: any) {
@@ -1032,7 +1117,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
         }),
 
         get_product: tool({
-            description: 'Retrieve details, ingredients, and claims for a product by ID or name.',
+            description: 'Find a catalog product from natural language: brand, partial name, Arabic/Darija/French/English wording, or spelling variation. Never require or invent product IDs. If several products could match, return candidates and let the user choose; never silently choose an ambiguous match.',
             inputSchema: z.object({
                 productId: z.string().optional().describe('Product ID e.g., DZ-CLE-BEL-002 or partial ID'),
                 productName: z.string().optional().describe('Product name e.g., "Belnco Clarifying Serum", "Venus Face Wash"'),
@@ -1082,6 +1167,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
 
                     // Candidate cards for ambiguous matches
                     if (result.candidates && result.candidates.length > 0) {
+                        state.lastProductResults = result.candidates;
                         turnState.lastProductResults = result.candidates;
                         recordDiscussedProducts(state, result.candidates, 'search');
                         return {
@@ -1144,7 +1230,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
         }),
 
         evaluate_product: tool({
-            description: 'Run Wathiq deterministic scoring on a product by its ID or Name. Evaluates safety, efficacy, overall score (0-100), and validates marketing claims with scientific evidence. Session allergies/skin type are attached automatically.',
+            description: 'Evaluate one intended product with Wathiq deterministic scoring. Use productId only when already grounded; otherwise use the user’s brand/partial product name for lookup. If several matches exist, show candidates and ask the user to select. Never invent IDs or evaluate an arbitrary candidate. Session allergies/skin type are attached automatically.',
             inputSchema: z.object({
                 productId: z.string().optional().describe('Product ID e.g. DZ-CLE-BEL-002'),
                 productName: z.string().optional().describe('Product name e.g. "Belnco Clarifying Serum" or "Venus Vitamin C serum" if ID is not known'),
@@ -1157,6 +1243,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
 
                     // Ambiguous matches now carry a candidates ARRAY — stream cards.
                     if (result.candidates && result.candidates.length > 0) {
+                        state.lastProductResults = result.candidates;
                         turnState.lastProductResults = result.candidates;
                         recordDiscussedProducts(state, result.candidates, 'search');
                         return {
@@ -1183,6 +1270,9 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                         finalVerdict: result.evaluation?.finalVerdict,
                         safetyScore: result.evaluation?.safety?.score,
                         efficacyScore: result.evaluation?.efficacy?.score,
+                        // Backend-authored explanations, passed through without inventing or rewriting them.
+                        scoreBreakdown: result.assistantEvidence?.scoreBreakdown || (Array.isArray(result.evaluation?.scoreBreakdown) ? result.evaluation.scoreBreakdown.slice(0, 16) : []),
+                        personalMatch: result.assistantEvidence?.personalMatch || result.evaluation?.personalMatch || null,
                         claimsSummary: (result.evaluation?.marketing_results || []).map((c: any) => ({
                             claim: c.claim,
                             status: c.status
@@ -1446,6 +1536,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                         title: result.title,
                         concern: result.concern,
                         routineType: result.routineType,
+                        builtAroundCabinet: Boolean(args.use_cabinet && state.userId),
                         totalCost: result.totalCost,
                         maxBudget: result.maxBudget,
                         savings: result.savings,
@@ -1550,10 +1641,12 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
 
                     const result = await getCommunityReviews({ productId: targetId, productName: targetName });
 
-                    if (!result.found) {
+                    if ('message' in result) {
                         return { found: false, message: result.message };
                     }
-
+                    if (!('reviewData' in result)) {
+                        return { error: 'لم تتوفر بيانات مراجعات منفصلة لهذا المنتج.' };
+                    }
                     const reviewData = result.reviewData;
 
                     // Set state for eager card streaming and final response packaging
@@ -1816,14 +1909,27 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
         }),
 
         modify_routine: tool({
-            description: 'Edit the routine already shown WITHOUT rebuilding it: swap one step (optionally cheaper, or with a named product), remove a step, add a step (toner, sunscreen, mask, eye_cream…), or refit to a new budget. Never use build_routine for these edits.',
+            description: 'Edit the existing routine in place; never rebuild it for an edit. Supports: swap/remove/add/refit, replace_all (replace every current product within the total budget), and batch (2–10 edits in one call, including multiple categories and explicitly named replacement products). For multiple exact products, put each operation in edits with its own category/step_number and replacement.name or replacement.id. If the user names a brand but not an exact product, use preferred_brand on that edit; for a whole-routine brand change, use preferred_brand with replace_all. An explicit brand must not be silently ignored. If the user says change all products, use replace_all; if they mention multiple individual products/categories, use batch. Preserve every unmentioned step.',
             inputSchema: z.object({
-                action: z.enum(['swap', 'remove', 'add', 'refit']),
+                action: z.enum(['swap', 'remove', 'add', 'refit', 'replace_all', 'batch']),
                 step_number: z.number().optional().describe('1-based step number as shown in the routine card.'),
                 category: z.string().optional().describe('Category of the step to target or add: cleanser, skin_serum, lotion_cream, sunscreen, toner, mask, eye_cream, scrub…'),
                 cheaper: z.boolean().optional().describe('swap: choose something strictly cheaper than the current product.'),
                 replacement: z.object({ id: z.string().optional(), name: z.string().optional() }).optional().describe('swap: the product the user named as the replacement.'),
-                max_budget: z.number().optional().describe('New budget in DZD (refit, or to allow a bigger swap/add).'),
+                preferred_brand: z.string().optional().describe('Optional required brand, e.g. CeraVe. If explicitly requested, never silently fall back to another brand.'),
+                new_category: z.string().optional().describe('Only when the user explicitly approves changing this step to another functional category; updates the step category/name/instructions.'),
+                allow_partial: z.boolean().optional().describe('Batch only: when user approves, apply feasible edits and leave unavailable steps unchanged.'),
+                max_budget: z.number().optional().describe('New total budget in DZD. Shared by all edits in a batch.'),
+                exclude_categories: z.array(z.string()).optional().describe('replace_all only: categories the user explicitly wants to keep unchanged, e.g. sunscreen.'),
+                edits: z.array(z.object({
+                    action: z.enum(['swap', 'remove', 'add']).describe('One atomic edit; use several entries for several mentioned products.'),
+                    step_number: z.number().optional().describe('1-based step number shown in the current routine card.'),
+                    category: z.string().optional().describe('Step category, e.g. cleanser, skin_serum, lotion_cream, sunscreen, toner, eye_cream.'),
+                    cheaper: z.boolean().optional().describe('For a swap, require a strictly cheaper replacement.'),
+                    replacement: z.object({ id: z.string().optional(), name: z.string().optional() }).optional().describe('Exact requested replacement product. Keep this per edit when the user names multiple products.'),
+                    preferred_brand: z.string().optional().describe('Required brand for this category if the user requests a brand but no exact product.'),
+                    new_category: z.string().optional().describe('Approved replacement category for this existing step; only if user agreed to change its function.'),
+                })).max(10).optional().describe('Required for action=batch. Supply one item per requested change; e.g. swap cleanser to X and serum to Y.'),
             }),
             execute: async (args: any) => {
                 console.log('[AGENT TOOL] Executing modify_routine with args:', args);
@@ -1832,7 +1938,8 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                         avoid_ingredients: [...state.profile.allergies, ...state.profile.avoidIngredients],
                         country: state.profile.country,
                     });
-                    if (result.error) return { error: result.error };
+                    if (result.error) return { needsFollowup: true, message: result.error, question: 'ما الذي تفضّل تغييره حتى أتابع؟', options: ['غيّر الماركة', 'ارفع الميزانية', 'غيّر فئة الخطوة', 'اختر منتجاً آخر'], unchanged: true };
+                    if (result.needsFollowup) return result;
                     state.lastRoutine = result;
                     turnState.lastRoutine = result;
                     recordRoutineVersion(state, result, `${result.modification?.action || 'edit'}${args.step_number ? ` step ${args.step_number}` : ''}${args.category ? ` ${args.category}` : ''}`);
@@ -1851,7 +1958,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                     };
                 } catch (err: any) {
                     console.error('[AGENT TOOL] modify_routine error:', err.message);
-                    return { error: `Routine edit failed: ${err.message}` };
+                    return { needsFollowup: true, kind: 'edit_failed', message: 'تعذّر تنفيذ هذا التعديل مؤقتاً، ولم أغيّر الروتين.', question: 'هل تريد أن أتابع بخيار بديل، أم نعدّل الماركة أو الميزانية أو نوع الخطوة؟', options: ['ابحث عن بديل', 'غيّر الماركة', 'ارفع الميزانية', 'غيّر فئة الخطوة'], recoverable: true, unchanged: true };
                 }
             }
         }),
@@ -2086,7 +2193,7 @@ function createAgentTools(state: SessionState, turnState: AgentStateTracker, use
                             status: args.status, verdict: args.verdict, note: args.note,
                             source: args.ingredients_text && !args.product_id ? 'scan' : undefined,
                         });
-                        if (!r.ok) {
+                        if (r.ok === false) {
                             if (r.candidates?.length) {
                                 turnState.lastProductResults = r.candidates;
                                 recordDiscussedProducts(state, r.candidates, 'search');
@@ -2392,33 +2499,351 @@ function formatFinalResponse(userMessage: string, assistantText: string, state: 
  * Streaming Chat using Vercel AI SDK
  */
 // ─── HELPER: EXTRACT AND CLEAN KEYS FROM GEMINI_API_KEYS ─────────────────────
-function getGeminiApiKeys(): string[] {
-    const raw = process.env.GEMINI_API_KEYS || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
-    const keys = raw
-        .split(',')
-        .map(k => k.replace(/['"\s]/g, '').trim())
-        .filter(Boolean);
+let lastPrimaryGeminiApiKey = '';
 
-    return keys.length > 0 ? keys : [''];
+/**
+ * Build and shuffle the configured Gemini key pool once per incoming user turn.
+ * GEMINI_API_KEYS is the canonical comma-separated pool; legacy environment
+ * variables are fallback-only. The request-local order is reused by narration,
+ * streaming retries, and non-streaming fallback. Keys are never logged.
+ */
+function getGeminiApiKeys(): string[] {
+    const collected: string[] = [];
+    const add = (raw?: string) => {
+        if (!raw) return;
+        // Support both GEMINI_API_KEYS=key1,key2 and a dotenv value wrapped as
+        // GEMINI_API_KEYS="key1,key2". Also tolerate individually quoted items.
+        const normalized = raw.trim().replace(/^([\'"])([\s\S]*)\1$/, '$2');
+        for (const part of normalized.split(',')) {
+            // Trim surrounding whitespace/quotes, preserving key characters.
+            const key = part.trim().replace(/^([\'"])([\s\S]*)\1$/, '$2').trim();
+            if (key && !collected.includes(key)) collected.push(key);
+        }
+    };
+
+    // GEMINI_API_KEYS is the canonical, comma-separated pool. If it is present
+    // and non-empty, keep it authoritative instead of mixing in stale keys from
+    // other environment variables. This prevents accidental rotation into a
+    // retired key left behind in a legacy variable.
+    add(process.env.GEMINI_API_KEYS);
+    if (collected.length === 0) {
+        // Backward compatibility for older deployments only when the canonical
+        // pool is absent/empty.
+        add(process.env.GOOGLE_API_KEYS);
+        add(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
+        add(process.env.GEMINI_API_KEY);
+        for (let i = 1; i <= 50; i++) add(process.env[`GEMINI_API_KEY_${i}`]);
+    }
+
+    if (collected.length === 0) return [''];
+
+    // Fisher–Yates with Node's cryptographic PRNG. The caller caches this order
+    // for the lifetime of one incoming user message; values are never logged.
+    for (let i = collected.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(0, i + 1);
+        [collected[i], collected[j]] = [collected[j], collected[i]];
+    }
+    // Avoid the same primary key for consecutive user turns, when the pool
+    // gives us a choice. This is rotation, not a guarantee of rate-limit relief.
+    if (collected.length > 1 && collected[0] === lastPrimaryGeminiApiKey) {
+        const swapIndex = 1 + crypto.randomInt(0, collected.length - 1);
+        [collected[0], collected[swapIndex]] = [collected[swapIndex], collected[0]];
+    }
+    lastPrimaryGeminiApiKey = collected[0];
+    return collected;
+}
+
+/**
+ * Credential failures must rotate to another configured Gemini key immediately.
+ * The AI SDK may either throw these errors or surface them as an `error` stream
+ * part and end the iterator normally; inspect both shapes without logging secrets.
+ */
+function isGeminiCredentialError(error: any): boolean {
+    if (!error) return false;
+    const candidates = [error, error.error, error.cause, error.data?.error, error.response?.data?.error];
+    for (const item of candidates) {
+        if (!item) continue;
+        const status = Number(item.statusCode ?? item.status ?? item.code);
+        if (status === 401 || status === 403) return true;
+        const statusText = String(item.status || '').toUpperCase();
+        if (statusText === 'UNAUTHENTICATED' || statusText === 'PERMISSION_DENIED') return true;
+        const reasonText = [item.reason, ...(Array.isArray(item.details) ? item.details.map((d: any) => d?.reason) : [])]
+            .filter(Boolean).join(' ').toUpperCase();
+        if (/API_KEY_INVALID|ACCESS_TOKEN_TYPE_UNSUPPORTED|INVALID_API_KEY/.test(reasonText)) return true;
+        const message = String(item.message || '');
+        if (/API key not valid|invalid API key|invalid_token|ACCESS_TOKEN_TYPE_UNSUPPORTED|UNAUTHENTICATED/i.test(message)) return true;
+    }
+    return false;
 }
 
 // ─── MODEL RESOLVER (non-streaming path) ─────────────────────────────────────
 // The original code called resolveModel() here but never defined it — every
 // non-streaming request crashed with ReferenceError. This restores it with
 // the same provider logic the streaming path uses.
-function resolveModel(provider?: string) {
+function resolveModel(provider?: string, requestGeminiKeys?: readonly string[]) {
     const isGemini = !provider || provider === 'gemini' || provider === 'google';
     if (isGemini) {
-        const keys = getGeminiApiKeys();
-        const apiKey = keys[Math.floor(Math.random() * keys.length)];
+        // Reuse the request-scoped order when supplied. This matters for turns
+        // that enter narration/fallback paths: they must not reshuffle halfway
+        // through one user message.
+        const keys = requestGeminiKeys?.length ? requestGeminiKeys : getGeminiApiKeys();
+        const apiKey = keys[0];
         const factory = apiKey ? createGoogleGenerativeAI({ apiKey }) : createGoogleGenerativeAI();
         return factory(process.env.GEMINI_AGENT_MODEL || 'gemini-3.5-flash-lite');
     }
     return groq(process.env.GROQ_AGENT_MODEL || 'openai/gpt-oss-120b');
 }
 
+const FAST_LANE_NARRATION_ENABLED = process.env.FAST_LANE_LLM_NARRATION !== 'false';
+const FAST_LANE_NARRATION_FIRST_TOKEN_MS = Math.max(1_000, parseInt(process.env.FAST_LANE_NARRATION_FIRST_TOKEN_MS || '2800', 10) || 2800);
+const FAST_LANE_NARRATION_TOTAL_MS = Math.max(3_000, parseInt(process.env.FAST_LANE_NARRATION_TOTAL_MS || '7500', 10) || 7500);
+
+function fastLaneEvidence(toolName: string, turnState: AgentStateTracker, fallbackText: string): any {
+    const t: any = turnState;
+    const asArray = (v: any): any[] => Array.isArray(v) ? v : [];
+    const clipText = (v: any, n = 220) => typeof v === 'string' ? v.slice(0, n) : v;
+    if (toolName === 'evaluate_product' && t.lastAnalysis) {
+        const a = t.lastAnalysis;
+        const e = a.evaluation || {};
+        return {
+            tool: toolName,
+            draft: clipText(fallbackText, 900),
+            product: { id: a.productId, name: a.name, brand: a.brand, price: a.price, currency: a.currency },
+            overall: { score: e.oilGuardScore ?? a.oilGuardScore, verdict: e.finalVerdict ?? a.finalVerdict },
+            safety: { score: e.safety?.score, flags: asArray(e.safety?.flags || e.safety?.alerts).slice(0, 6).map((x: any) => {
+                if (typeof x === 'string') return clipText(x, 180);
+                try { return clipText(x?.message || x?.ingredient || JSON.stringify(x), 180); } catch { return '[flag]'; }
+            }) },
+            efficacy: { score: e.efficacy?.score, notes: clipText(e.efficacy?.summary || e.efficacy?.verdict, 350) },
+            // Deterministic scoring notes from Wathiq's backend, not model-generated explanations.
+            scoreBreakdown: asArray(e.scoreBreakdown).slice(0, 16).map((item: any) => ({
+                type: clipText(item?.type, 40), text: clipText(item?.text, 240),
+                value: item?.value == null ? null : clipText(String(item.value), 80),
+            })),
+            personalMatch: e.personalMatch && typeof e.personalMatch === 'object' ? {
+                status: clipText(e.personalMatch.status, 40),
+                reasons: asArray(e.personalMatch.reasons).slice(0, 10).map((item: any) => ({
+                    type: clipText(item?.type, 40), code: clipText(item?.code, 80), text: clipText(item?.text, 240),
+                })),
+            } : null,
+            claims: asArray(e.marketing_results).slice(0, 10).map((c: any) => ({ claim: clipText(c?.claim, 160), status: clipText(c?.status, 100), reason: clipText(c?.reason || c?.explanation || c?.evidence_summary, 220) })),
+            detectedIngredients: asArray(e.detected_ingredients).slice(0, 12).map((i: any) => clipText(i?.name || i?.id || i, 100)),
+        };
+    }
+    if (toolName === 'search_products' || toolName === 'find_alternatives' || toolName === 'find_actives_dupe') {
+        return {
+            tool: toolName,
+            draft: clipText(fallbackText, 900),
+            products: asArray(t.lastProductResults).slice(0, 8).map((p: any) => ({
+                id: p?.id, name: p?.name, brand: p?.brand, category: p?.category,
+                price: p?.price, priceKnown: p?.priceKnown, oilGuardScore: p?.oilGuardScore,
+                verdict: p?.finalVerdict, claims: asArray(p?.marketingClaims || p?.claims).slice(0, 5),
+            })),
+            reference: t.lastAlternativesReference ? { id: t.lastAlternativesReference.id, name: t.lastAlternativesReference.name, brand: t.lastAlternativesReference.brand } : undefined,
+        };
+    }
+    if ((toolName === 'build_routine' || toolName === 'modify_routine') && t.lastRoutine) {
+        const r = t.lastRoutine;
+        return { tool: toolName, draft: clipText(fallbackText, 900), routine: {
+            title: r.title, concern: r.concern, totalCost: r.totalCost, savings: r.savings,
+            steps: asArray(r.steps).slice(0, 10).map((x: any) => ({ stepNumber: x?.stepNumber, stepName: x?.stepName, category: x?.category, usageTime: x?.usageTime, howToUse: clipText(x?.howToUse, 180), whyChosen: clipText(x?.whyChosen, 220), product: { id: x?.product?.id, brand: x?.product?.brand, name: x?.product?.name, price: x?.product?.price } })),
+            usageTips: asArray(r.usageTips).slice(0, 5).map((x: any) => clipText(x, 180)),
+        } };
+    }
+    const snapshots: Record<string, any> = {
+        evaluate_brand: t.lastBrandEvaluation,
+        compare_products: t.lastComparison,
+        check_compatibility: t.lastCompatibility,
+        check_ingredient_list: t.lastIngredientCheck,
+        product_contains: t.lastIngredientPresence,
+        get_community_reviews: t.lastReviewData || t.lastBrandReviews,
+        manage_cabinet: t.lastCabinet,
+        generate_usage_schedule: t.lastUsageSchedule,
+        triage_reaction: t.lastTriage,
+        build_shopping_list: t.lastShoppingList,
+        build_gift_set: t.lastGift,
+        routine_versions: t.lastRoutineDiff,
+        explain_pick: t.lastExplanation,
+    };
+    const raw = snapshots[toolName];
+    let safeRaw: any = raw;
+    if (raw && typeof raw === 'object') {
+        try {
+            const json = JSON.stringify(raw);
+            safeRaw = json.length > 7_000 ? `${json.slice(0, 7_000)} [truncated]` : raw;
+        } catch { safeRaw = '[structured result unavailable]'; }
+    }
+    return { tool: toolName, draft: clipText(fallbackText, 1200), result: safeRaw ?? null };
+}
+
 /**
- * Per-turn session bootstrap: derives the key, loads/creates the session,
+ * After Fast Lane has executed a decisive tool and emitted its card, stream a
+ * short narration without tools. This prevents a second model round-trip from
+ * choosing the tool or delaying the UI card. The deterministic draft remains a
+ * fallback if the narration provider is slow or unavailable.
+ */
+async function streamFastLaneNarration(args: {
+    request: ChatRequest;
+    toolName: string;
+    evidence: any;
+    fallbackText: string;
+    emitText: (delta: string) => void;
+    emitStatus: (status: string) => void;
+    externalSignal?: AbortSignal;
+    geminiKeys: readonly string[];
+}): Promise<string> {
+    const { request, toolName, evidence, fallbackText, emitText, emitStatus, externalSignal, geminiKeys } = args;
+    const startedAt = nowMs();
+    const controller = new AbortController();
+    let firstTokenTimedOut = false;
+    let totalTimedOut = false;
+    let timedOut = false;
+    let output = '';
+    let firstTimer: ReturnType<typeof setTimeout> | undefined;
+    let externalAbortHandler: (() => void) | undefined;
+
+    // Race explicit deadlines against the SDK iterator. AbortSignal alone is not
+    // enough: a provider/SDK adapter can stall without settling the iterator.
+    let resolveFirstTimeout!: (value: 'first_timeout') => void;
+    let resolveTotalTimeout!: (value: 'total_timeout') => void;
+    const firstTimeoutPromise = new Promise<'first_timeout'>(resolve => { resolveFirstTimeout = resolve; });
+    const totalTimeoutPromise = new Promise<'total_timeout'>(resolve => { resolveTotalTimeout = resolve; });
+    const onExternalAbort = () => { timedOut = true; controller.abort(); };
+    if (externalSignal?.aborted) onExternalAbort();
+    else externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+
+    const totalTimer = setTimeout(() => {
+        totalTimedOut = true;
+        timedOut = true;
+        controller.abort();
+        resolveTotalTimeout('total_timeout');
+    }, FAST_LANE_NARRATION_TOTAL_MS);
+    firstTimer = setTimeout(() => {
+        if (output.length === 0) {
+            firstTokenTimedOut = true;
+            timedOut = true;
+            controller.abort();
+            resolveFirstTimeout('first_timeout');
+        }
+    }, FAST_LANE_NARRATION_FIRST_TOKEN_MS);
+
+    emitStatus(STATUS.FORMULATING);
+    const langInstruction = 'Reply in the same language and register as the user (including Algerian Darija if used).';
+    const system = [
+        'You are Wathiq, a cosmetics product-evaluation assistant. A deterministic Wathiq tool has ALREADY run and its result card is already visible to the user.',
+        'Your only task is to explain that completed result in a concise, natural response. Do not call tools, request another evaluation, or pretend the result is provisional.',
+        'Treat the structured result as the only source of truth. Never change or invent product names, scores, prices, verdicts, ingredients, claim statuses, or safety findings. If a field is absent, do not infer it.',
+        'For product evaluation, explain the overall score and relevant safety/efficacy/marketing-claim findings that actually exist in the report. Avoid unsupported medical claims and exaggerated certainty.',
+        'Preserve any useful, concrete next-step offer in the provided draft. Do not repeat the entire card or narrate UI mechanics such as “see the card below”. Prefer 2–5 short sentences.',
+        langInstruction,
+    ].join(' ');
+    const safePromptEvidence = (() => {
+        try { return JSON.stringify(evidence).slice(0, 10_000); }
+        catch { return '{"note":"structured result unavailable"}'; }
+    })();
+    const prompt = `USER MESSAGE:
+${String(request.message || '').slice(0, 1200)}
+
+COMPLETED FAST-LANE RESULT (JSON, authoritative):
+${safePromptEvidence}
+
+Write the user-facing explanation now. The draft is only a wording hint; all factual details must agree with the JSON.`;
+
+    const narrationTask: Promise<'done' | 'error'> = (async () => {
+        const isGeminiNarrator = !request.provider || request.provider === 'gemini' || request.provider === 'google';
+        const attemptCount = isGeminiNarrator ? Math.max(1, geminiKeys.length) : 1;
+        for (let keyIndex = 0; keyIndex < attemptCount; keyIndex++) {
+            if (timedOut || externalSignal?.aborted) return 'error';
+            let credentialRejected = false;
+            try {
+                // Narration runs after the deterministic card. If one key is
+                // rejected, try the next key within the same short narration
+                // deadline rather than giving up after the shuffled primary.
+                const attemptKeys = isGeminiNarrator ? [geminiKeys[keyIndex]] : geminiKeys;
+                const narrationStream = streamText({
+                    model: resolveModel(request.provider, attemptKeys),
+                    system,
+                    messages: [{ role: 'user', content: prompt }],
+                    maxOutputTokens: Math.min(420, Math.max(180, pickMaxOutputTokens(request.message))),
+                    temperature: 0.2,
+                    abortSignal: controller.signal,
+                });
+                for await (const part of narrationStream.fullStream) {
+                    if (timedOut || externalSignal?.aborted) break;
+                    if (part.type === 'error' && isGeminiCredentialError((part as any).error || part)) {
+                        credentialRejected = true;
+                        break;
+                    }
+                    if (part.type !== 'text-delta') continue;
+                    const delta = String((part as any).textDelta || (part as any).text || '');
+                    if (!delta) continue;
+                    if (firstTimer) { clearTimeout(firstTimer); firstTimer = undefined; }
+                    output += delta;
+                    emitText(delta);
+                }
+                if (credentialRejected && output.length === 0 && !timedOut && keyIndex < attemptCount - 1) {
+                    logReq(newReqId(), 'FAST_NARRATION', 'Gemini rejected the narration key; trying the next configured key', {
+                        attempt: `${keyIndex + 1}/${attemptCount}`,
+                        remainingKeys: attemptCount - keyIndex - 1,
+                    });
+                    continue;
+                }
+                return credentialRejected && output.length === 0 ? 'error' : 'done';
+            } catch (error: any) {
+                if (isGeminiNarrator && isGeminiCredentialError(error) && output.length === 0 && !timedOut && keyIndex < attemptCount - 1) {
+                    logReq(newReqId(), 'FAST_NARRATION', 'Gemini rejected the narration key; trying the next configured key', {
+                        attempt: `${keyIndex + 1}/${attemptCount}`,
+                        remainingKeys: attemptCount - keyIndex - 1,
+                    });
+                    continue;
+                }
+                if (!externalSignal?.aborted && process.env.AGENT_DEBUG !== 'false') {
+                    console.warn(`[AGENT][FAST_NARRATION] tool=${toolName} failed after card delivery (${isGeminiCredentialError(error) ? 'credential rejected' : (error?.name || 'Error')}); using deterministic draft`);
+                }
+                return 'error';
+            }
+        }
+        return 'error';
+    })();
+
+    const externalAbortPromise = externalSignal ? new Promise<'external_abort'>(resolve => {
+        if (externalSignal.aborted) resolve('external_abort');
+        else {
+            externalAbortHandler = () => resolve('external_abort');
+            externalSignal.addEventListener('abort', externalAbortHandler, { once: true });
+        }
+    }) : new Promise<never>(() => {});
+
+    let outcome: 'done' | 'error' | 'first_timeout' | 'total_timeout' | 'external_abort';
+    try {
+        outcome = await Promise.race([narrationTask, firstTimeoutPromise, totalTimeoutPromise, externalAbortPromise]);
+        if (outcome === 'first_timeout') timedOut = true;
+        if (outcome === 'total_timeout') { totalTimedOut = true; timedOut = true; }
+        if (outcome === 'external_abort') timedOut = true;
+        if (timedOut) controller.abort();
+    } finally {
+        if (firstTimer) clearTimeout(firstTimer);
+        clearTimeout(totalTimer);
+        externalSignal?.removeEventListener('abort', onExternalAbort);
+        if (externalAbortHandler) externalSignal?.removeEventListener('abort', externalAbortHandler);
+    }
+
+    if (!output.trim() && !externalSignal?.aborted) {
+        emitText(fallbackText);
+        logReq(newReqId(), 'FAST_NARRATION', 'narration unavailable; emitted deterministic fallback', {
+            tool: toolName, durationMs: nowMs() - startedAt, firstTokenTimedOut, totalTimedOut, outcome,
+        });
+        return fallbackText;
+    }
+    logReq(newReqId(), 'FAST_NARRATION', 'completed after immediate card delivery', {
+        tool: toolName, durationMs: nowMs() - startedAt, outputLength: output.length, firstTokenTimedOut, totalTimedOut, outcome,
+    });
+    return output.trim() || fallbackText;
+}
+
+/**
+ * Per-turn session bootstrap:
+ derives the key, loads/creates the session,
  * advances the turn counter and folds this message's facts (skin type,
  * allergies, budget, preferences) into the session profile BEFORE routing
  * and tool-arg autofill read them.
@@ -2427,6 +2852,10 @@ function beginTurn(request: ChatRequest): { sessionId: string; state: SessionSta
     const sessionId = deriveSessionKey(request);
     const state = sessionMemory.getOrCreate(sessionId);
     state.turnCount++;
+    if (isDebugEnabled()) {
+        const sessionFingerprint = crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 8);
+        logReq(newReqId(), 'SESSION', `turn=${state.turnCount} session=${sessionFingerprint} explicitSessionId=${Boolean(request.sessionId)} historyMessages=${request.conversation?.length || 0} hasRoutine=${Boolean(state.lastRoutine?.steps?.length)}`);
+    }
     try { reloadLearnedAliasesIfChanged(); } catch { /* non-fatal: keep serving the old aliases */ }
 
     // Cabinet owner (in-memory only; the id itself is never persisted by the session).
@@ -2550,36 +2979,23 @@ function pickMaxOutputTokens(message: string): number {
     return wantsDetail ? 1200 : compoundTurn ? 600 : 200;
 }
 
-const STATUS_BY_TOOL: Record<string, string> = {
-    search_products: '🔍 جاري البحث في كتالوج المنتجات...',
-    evaluate_product: '🧪 جاري فحص وتحليل التركيبة مع OilGuard...',
-    evaluate_brand: '🏷️ جاري تحليل جميع منتجات الماركة...',
-    get_product: '📋 جاري استرجاع تفاصيل المنتج ومكوناته...',
-    build_routine: '🧴 جاري تكوين روتين عناية متكامل...',
-    get_products_details: '📋 جاري استرجاع مكونات المنتجات...',
-    list_unknown_ingredients: '🧪 جاري تحليل المكونات غير المفهرسة... قد يستغرق هذا بعض الوقت',
-    get_community_reviews: '💬 جاري فحص تجارب وآراء المستخدمين في تيك توك...',
-    compare_products: '⚖️ جاري المقارنة بين المنتجات بنفس المعايير...',
-    check_ingredient_list: '🧫 جاري تحليل قائمة المكونات المُدخلة...',
-    product_contains: '🔎 جاري فحص القائمة الكاملة للمكونات...',
-    find_alternatives: '🔁 جاري البحث عن بدائل تشاركه المكونات الفعالة...',
-    check_compatibility: '🧬 جاري فحص توافق المكونات...',
-    modify_routine: '✏️ جاري تعديل الروتين...',
-    find_actives_dupe: '🧬 جاري البحث عن بدائل محلية تشاركه المكونات الفعالة...',
-    generate_usage_schedule: '🗓️ جاري إعداد جدول التدرج الآمن...',
-    manage_cabinet: '🗄️ جاري تحديث خزانتك...',
-    triage_reaction: '🩺 جاري تحليل ما تعانيه بشرتك...',
-    routine_versions: '🕘 جاري استرجاع نسخ الروتين...',
-    explain_pick: '🔎 جاري تحليل سبب الاختيار...',
-    share_routine: '📤 جاري تجهيز الروتين للمشاركة...',
-    build_shopping_list: '🛒 جاري إعداد قائمة التسوق...',
-    build_gift_set: '🎁 جاري تكوين مجموعة الهدية...',
-    suggest_learning: '💡 جاري تسجيل المعلومة الجديدة للتدقيق...',
-};
 
-const FIRST_TOKEN_TIMEOUT_MS = Math.max(1000, parseInt(process.env.AGENT_FIRST_TOKEN_TIMEOUT_MS || '5000', 10) || 5000);
-// A blank model stream is not success. Try one alternate key by default, then
-// return a visible error instead of leaving the chat with an empty assistant turn.
+
+// Keep stalls bounded. Explicit environment values can increase these budgets,
+// but the default path should not wait 15s + 15s + 20s when a provider is wedged.
+const FIRST_USEFUL_OUTPUT_TIMEOUT_MS = Math.max(
+    8_000,
+    parseInt(
+        process.env.AGENT_FIRST_USEFUL_OUTPUT_TIMEOUT_MS || process.env.AGENT_FIRST_TOKEN_TIMEOUT_MS || '8000',
+        10,
+    ) || 8000,
+);
+const MODEL_WAIT_STATUS_INTERVAL_MS = Math.max(2_500, parseInt(process.env.AGENT_MODEL_WAIT_STATUS_INTERVAL_MS || '4500', 10) || 4500);
+const NON_STREAM_FALLBACK_TIMEOUT_MS = Math.max(5_000, parseInt(process.env.AGENT_NON_STREAM_FALLBACK_TIMEOUT_MS || '6000', 10) || 6000);
+// After a card/tool result exists, give the model a short window to synthesize.
+// If it stalls, keep the real card and return a truthful deterministic summary.
+const POST_TOOL_TEXT_TIMEOUT_MS = Math.max(4_000, parseInt(process.env.AGENT_POST_TOOL_TEXT_TIMEOUT_MS || '6000', 10) || 6000);
+// One retry on another key; a second empty stream should not create a long queue.
 const MAX_EMPTY_STREAM_ATTEMPTS = Math.max(1, parseInt(process.env.AGENT_EMPTY_STREAM_ATTEMPTS || '2', 10) || 2);
 
 // Tool logs aid debugging without dumping user profiles, raw ingredients,
@@ -2638,6 +3054,9 @@ export async function streamChat(
 ) {
     const reqId = newReqId();
     const t0 = nowMs();
+    // Shuffle exactly once per incoming user message. Every model call and retry
+    // in this turn shares this immutable key order.
+    const requestGeminiKeys = getGeminiApiKeys();
     const { sessionId, state } = beginTurn(request);
     const turnState = newTurnState();
     const externalSignal = options.abortSignal;
@@ -2653,23 +3072,26 @@ export async function streamChat(
         callbacks.onTextDelta?.(delta);
     };
 
+    // One request-scoped status stream is shared by the model lane, fast lane,
+    // scan lane, and tools. This is the single emitter for all live progress.
+    const emitStatus = createStatusReporter(callbacks.onStatus);
+
     // The status at this point is only a router hint, not a confirmed tool call.
-    // Emit a neutral status until the fast lane starts a tool or the model emits tool-call.
     const routerStartedAt = nowMs();
     const quickIntent = classifyIntent(request.message, state);
     const routerDurationMs = nowMs() - routerStartedAt;
     const firstTool = quickIntent.likelyTools[0];
     if (isDebugEnabled()) logReq(reqId, 'TIMING', `INTENT_ROUTER duration=${routerDurationMs}ms tool=${firstTool || 'none'} confidence=${quickIntent.confidence} compound=${Boolean(quickIntent.compound)}`);
-    callbacks.onStatus?.('🧠 جاري فهم طلبك وتجهيز المسار المناسب...');
+    emitStatus(STATUS.ROUTING);
 
-    const tools = createAgentTools(state, turnState, request.message, sessionId);
+    const tools = createAgentTools(state, turnState, request.message, sessionId, emitStatus);
 
     // ─── SCAN LANE: a photo of a shelf label / pack ───────────────────────────
     if (request.images && request.images.length > 0) {
         const scan = await tryScanLane({
             message: request.message, images: request.images, state, turnState, tools,
-            parser: parseContributionImages as any,
-            emitCard, emitText, emitStatus: callbacks.onStatus,
+            parser: (payload: any) => parseContributionImages(payload, requestGeminiKeys) as any,
+            emitCard, emitText, emitStatus,
         });
         if (scan) {
             sessionMemory.touch(sessionId);
@@ -2681,24 +3103,59 @@ export async function streamChat(
 
     // ─── FAST LANE ───────────────────────────────────────────────────────────
     if (FAST_LANE_ENABLED && !externalSignal?.aborted && state.longtermForgotTurn !== state.turnCount) {
+        const directEvaluationIntent = quickIntent.confidence === 'high'
+            && quickIntent.likelyTools[0] === 'evaluate_product'
+            && !looksLikeReaction(request.message);
         const safetyStartedAt = nowMs();
-        const safetyMatched = await hasSafetyTrigger(request.message);
-        if (isDebugEnabled()) logReq(reqId, 'TIMING', `SAFETY_GATE duration=${nowMs() - safetyStartedAt}ms matched=${safetyMatched}`);
-        if (!safetyMatched && !externalSignal?.aborted) {
+        // A direct Wathiq evaluation already computes safety/efficacy/claims. Don't
+        // make a separate knowledge lookup delay this path; reaction/urgent messages
+        // remain on the specialized safety lane.
+        const safetyMatched = directEvaluationIntent ? false : await hasSafetyTrigger(request.message);
+        if (isDebugEnabled()) logReq(reqId, 'TIMING', `SAFETY_GATE duration=${nowMs() - safetyStartedAt}ms matched=${safetyMatched} directEvaluation=${directEvaluationIntent}`);
+        if ((!safetyMatched || directEvaluationIntent) && !externalSignal?.aborted) {
             const fastStartedAt = nowMs();
+            let capturedFastText = '';
             try {
                 const fast = await tryFastLane({
                     message: request.message,
                     state, turnState, tools,
                     intent: quickIntent as any,
-                    emitCard, emitText,
-                    emitStatus: callbacks.onStatus,
+                    emitCard,
+                    emitText: (delta: string) => { capturedFastText += delta; },
+                    emitStatus,
                 });
                 if (isDebugEnabled()) logReq(reqId, 'TIMING', `FAST_LANE_DISPATCH duration=${nowMs() - fastStartedAt}ms result=${fast ? fast.tool : 'fallback-to-llm'}`);
                 if (fast) {
+                    let userFacingText = capturedFastText.trim() || fast.text;
+                    // Tool card events have already been sent to the client by this
+                    // point. The model is now only a narrator; it receives no tools,
+                    // so it cannot delay or replace the evaluator's authoritative result.
+                    if (FAST_LANE_NARRATION_ENABLED && firstCardMs >= 0 && !externalSignal?.aborted) {
+                        try {
+                            userFacingText = await streamFastLaneNarration({
+                                request,
+                                toolName: fast.tool,
+                                evidence: fastLaneEvidence(fast.tool, turnState, userFacingText),
+                                fallbackText: userFacingText,
+                                emitText,
+                                emitStatus,
+                                externalSignal,
+                                geminiKeys: requestGeminiKeys,
+                            });
+                        } catch (narrationError: any) {
+                            // A narration-only failure must never invalidate a completed tool/card
+                            // or fall through into another tool-calling LLM round-trip.
+                            if (isDebugEnabled()) logReq(reqId, 'FAST_NARRATION', `fallback after narration exception: ${narrationError?.message || narrationError}`);
+                            userFacingText = fast.text;
+                            if (!externalSignal?.aborted) emitText(userFacingText);
+                        }
+                    } else if (!externalSignal?.aborted) {
+                        emitText(userFacingText);
+                    }
+                    fast.text = userFacingText;
                     sessionMemory.touch(sessionId);
                     finalizeTurn(request, state, turnState);
-                    if (isDebugEnabled()) logReq(reqId, 'TIMING', `FAST LANE (${fast.tool}) total=${nowMs() - t0}ms firstCard=${firstCardMs}ms firstText=${firstTextMs}ms modelCalls=0`);
+                    if (isDebugEnabled()) logReq(reqId, 'TIMING', `FAST LANE (${fast.tool}) total=${nowMs() - t0}ms firstCard=${firstCardMs}ms firstText=${firstTextMs}ms modelCalls=${FAST_LANE_NARRATION_ENABLED && firstCardMs >= 0 ? 1 : 0}`);
                     return attachQuickReplies({ ...formatFinalResponse(request.message, fast.text, turnState), sessionId, lane: 'fast' }, request, state);
                 }
             } catch (e: any) {
@@ -2717,7 +3174,7 @@ export async function streamChat(
     const maxOutputTokens = pickMaxOutputTokens(request.message);
 
     const isGemini = !request.provider || request.provider === 'gemini' || (request.provider as string) === 'google';
-    const keys = isGemini ? getGeminiApiKeys() : [''];
+    const keys = isGemini ? requestGeminiKeys : [''];
 
     let fullText = '';
     let lastError: any = null;
@@ -2726,25 +3183,72 @@ export async function streamChat(
     const calledTools = new Set<string>();
     let streamFinishReason = 'unknown';
     let firstStreamEventMs = -1;
+    let firstUsefulOutputMs = -1;
     let emptyStreamAttempts = 0;
+    let postToolSynthesisTimedOut = false;
+
+    // The user should see that the model is still processing, not a frozen chat.
+    // All copy stays in statuses.ts to preserve a single source of truth.
+    emitStatus(STATUS.MODEL_START);
 
     // ─── SEQUENTIAL KEY FAILOVER LOOP (NO BLACKLISTS) ────────────────────────
     for (let i = 0; i < keys.length; i++) {
         if (externalSignal?.aborted) { clientGone = true; break; }
         const apiKey = keys[i];
 
-        // Per-attempt abort: fires on client disconnect OR when no useful output
-        // (text or a tool call) arrives within FIRST_TOKEN_TIMEOUT_MS. Apply it
-        // even with one key, so a silent provider cannot hold the request forever.
+        // Per-attempt abort: fires on client disconnect OR if no usable text/tool call
+        // arrives within FIRST_USEFUL_OUTPUT_TIMEOUT_MS. Non-useful SDK metadata
+        // events do not reset this timer, and one attempt cannot stall forever.
         const attempt = new AbortController();
         const onExternalAbort = () => attempt.abort();
         externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
         let timedOut = false;
-        let firstTokenTimer: NodeJS.Timeout | null = setTimeout(() => {
+        let usefulOutputSeen = false;
+        const attemptStartedAt = nowMs();
+        let attemptFirstEventMs = -1;
+        let attemptFirstUsefulOutputMs = -1;
+        let attemptFirstUsefulKind = 'none';
+        const observedEventTypes = new Map<string, number>();
+        let credentialRejectedThisAttempt = false;
+        let firstUsefulTimer: NodeJS.Timeout | null = setTimeout(() => {
             timedOut = true;
             attempt.abort();
-        }, FIRST_TOKEN_TIMEOUT_MS);
-        const clearFirstTokenTimer = () => { if (firstTokenTimer) { clearTimeout(firstTokenTimer); firstTokenTimer = null; } };
+        }, FIRST_USEFUL_OUTPUT_TIMEOUT_MS);
+        let postToolTextTimer: NodeJS.Timeout | null = null;
+        let waitingForPostToolSynthesis = false;
+        const clearPostToolTextTimer = () => {
+            if (postToolTextTimer) { clearTimeout(postToolTextTimer); postToolTextTimer = null; }
+        };
+        const armPostToolTextTimer = () => {
+            clearPostToolTextTimer();
+            if (!waitingForPostToolSynthesis) return;
+            postToolTextTimer = setTimeout(() => {
+                postToolSynthesisTimedOut = true;
+                attempt.abort();
+            }, POST_TOOL_TEXT_TIMEOUT_MS);
+        };
+        let waitStatusIndex = 0;
+        let waitStatusTimer: NodeJS.Timeout | null = setInterval(() => {
+            if (usefulOutputSeen || attempt.signal.aborted) return;
+            const waitingStatuses = [STATUS.MODEL_WAITING, STATUS.MODEL_CONTINUING];
+            emitStatus(waitingStatuses[waitStatusIndex % waitingStatuses.length]);
+            waitStatusIndex += 1;
+        }, MODEL_WAIT_STATUS_INTERVAL_MS);
+        const clearFirstUsefulTimer = () => {
+            if (firstUsefulTimer) { clearTimeout(firstUsefulTimer); firstUsefulTimer = null; }
+        };
+        const clearWaitStatusTimer = () => {
+            if (waitStatusTimer) { clearInterval(waitStatusTimer); waitStatusTimer = null; }
+        };
+        const markUsefulOutput = (kind: string) => {
+            if (usefulOutputSeen) return;
+            usefulOutputSeen = true;
+            attemptFirstUsefulKind = kind;
+            attemptFirstUsefulOutputMs = nowMs() - attemptStartedAt;
+            if (firstUsefulOutputMs < 0) firstUsefulOutputMs = nowMs() - t0;
+            clearFirstUsefulTimer();
+            clearWaitStatusTimer();
+        };
 
         try {
             console.log(`[AGENT] 🔑 Attempting stream with key [${i + 1}/${keys.length}]...`);
@@ -2767,9 +3271,17 @@ export async function streamChat(
             });
 
             for await (const part of stream.fullStream) {
+                const eventType = String((part as any)?.type || 'unknown');
+                observedEventTypes.set(eventType, (observedEventTypes.get(eventType) || 0) + 1);
+                if (attemptFirstEventMs < 0) attemptFirstEventMs = nowMs() - attemptStartedAt;
                 if (firstStreamEventMs < 0) firstStreamEventMs = nowMs() - t0;
+                if (isGemini && eventType === 'error' && isGeminiCredentialError((part as any).error || part)) {
+                    credentialRejectedThisAttempt = true;
+                }
                 if (part.type === 'tool-call') {
-                    clearFirstTokenTimer();
+                    waitingForPostToolSynthesis = false;
+                    clearPostToolTextTimer();
+                    markUsefulOutput('tool-call');
                     calledTools.add(part.toolName);
                     const toolPart = part as any;
                     const toolCallId = String(toolPart.toolCallId || `${part.toolName}:${activeToolCalls.size + 1}`);
@@ -2778,10 +3290,11 @@ export async function streamChat(
                         toolCallId,
                         args: sanitizeToolLogArgs(toolPart.input ?? toolPart.args ?? toolPart.arguments ?? {}),
                     });
-                    const status = STATUS_BY_TOOL[part.toolName];
-                    if (status) callbacks.onStatus?.(status);
+                    emitToolStatus(part.toolName, emitStatus);
                 } else if (part.type === 'tool-result') {
-                    clearFirstTokenTimer();
+                    // A result implies a tool was already selected; keep this guard
+                    // for SDK/provider versions that surface results without a call event.
+                    markUsefulOutput('tool-result');
                     const toolPart = part as any;
                     const toolCallId = String(toolPart.toolCallId || '');
                     const active = activeToolCalls.get(toolCallId);
@@ -2792,10 +3305,11 @@ export async function streamChat(
                         result: summarizeToolLogResult(toolPart.output ?? toolPart.result),
                     });
                     if (toolCallId) activeToolCalls.delete(toolCallId);
-                    callbacks.onStatus?.('✨ جاري صياغة التقييم والنتيجة...');
+                    emitStatus(STATUS.FORMULATING);
                     emitCardForTool(toolName, turnState, emitCard);
+                    waitingForPostToolSynthesis = true;
+                    armPostToolTextTimer();
                 } else if (part.type === 'tool-error') {
-                    clearFirstTokenTimer();
                     const toolPart = part as any;
                     const toolCallId = String(toolPart.toolCallId || '');
                     const active = activeToolCalls.get(toolCallId);
@@ -2808,7 +3322,8 @@ export async function streamChat(
                 } else if (part.type === 'text-delta') {
                     const delta = (part as any).textDelta || (part as any).text;
                     if (delta) {
-                        clearFirstTokenTimer();
+                        if (waitingForPostToolSynthesis) armPostToolTextTimer();
+                        markUsefulOutput('text-delta');
                         fullText += delta;
                         emitText(delta);
                     }
@@ -2817,24 +3332,56 @@ export async function streamChat(
                 }
             }
 
+            // A timed-out synthesis is a failed model turn, even if the SDK ended
+            // the iterator normally after aborting. Do not retry the model after a
+            // completed tool result; the recovery pass below will surface real data.
+            if (postToolSynthesisTimedOut && !fullText.trim()) {
+                lastError = new Error('post-tool synthesis timeout');
+                logReq(reqId, 'LLM_STREAM', 'post-tool synthesis timed out; checking request-local tool output', {
+                    timeoutMs: POST_TOOL_TEXT_TIMEOUT_MS,
+                    toolCalls: Array.from(calledTools),
+                });
+                break;
+            }
+
+            // Some AI SDK versions yield an `error` part rather than throwing on
+            // HTTP 401/403. Such a failure says nothing about the other keys, so
+            // rotate immediately and do not consume the slow-empty-stream budget.
+            if (isGemini && credentialRejectedThisAttempt && !fullText.trim() && calledTools.size === 0) {
+                lastError = new Error('Gemini rejected this API key');
+                logReq(reqId, 'LLM_STREAM', 'Gemini rejected this key; trying the next configured key', {
+                    attempt: `${i + 1}/${keys.length}`,
+                    remainingKeys: Math.max(0, keys.length - i - 1),
+                });
+                if (i < keys.length - 1) {
+                    emitStatus(STATUS.RETRYING);
+                    continue;
+                }
+                break;
+            }
+
             // An AbortSignal may make the SDK end fullStream normally rather
             // than throw. Do NOT treat that as success if the model produced no
             // text and never selected a tool (the exact failure seen in logs).
-            // Retry on one alternate key, bounded by MAX_EMPTY_STREAM_ATTEMPTS.
+            // Real timeouts remain bounded by MAX_EMPTY_STREAM_ATTEMPTS.
             if (!fullText.trim() && calledTools.size === 0) {
                 emptyStreamAttempts += 1;
                 lastError = new Error(timedOut ? 'first useful output timeout' : 'empty model stream');
                 logReq(reqId, 'LLM_STREAM', 'attempt produced no usable output', {
                     attempt: `${i + 1}/${keys.length}`,
                     timedOut,
-                    timeoutMs: FIRST_TOKEN_TIMEOUT_MS,
+                    timeoutMs: FIRST_USEFUL_OUTPUT_TIMEOUT_MS,
                     finishReason: streamFinishReason,
                     firstStreamEventMs,
+                    firstEventThisAttemptMs: attemptFirstEventMs,
+                    firstUsefulOutputThisAttemptMs: attemptFirstUsefulOutputMs,
+                    firstUsefulKind: attemptFirstUsefulKind,
+                    observedEventTypes: Object.fromEntries(observedEventTypes),
                     emptyStreamAttempts,
                     maxEmptyStreamAttempts: MAX_EMPTY_STREAM_ATTEMPTS,
                 });
                 if (i < keys.length - 1 && emptyStreamAttempts < MAX_EMPTY_STREAM_ATTEMPTS) {
-                    callbacks.onStatus?.('🧠 تعذّر الحصول على رد، أعيد المحاولة...');
+                    emitStatus(STATUS.RETRYING);
                     continue;
                 }
                 break;
@@ -2848,6 +3395,10 @@ export async function streamChat(
                 toolCalls: Array.from(calledTools),
                 textLength: fullText.length,
                 firstStreamEventMs,
+                firstUsefulOutputMs,
+                firstEventThisAttemptMs: attemptFirstEventMs,
+                firstUsefulOutputThisAttemptMs: attemptFirstUsefulOutputMs,
+                firstUsefulKind: attemptFirstUsefulKind,
                 firstTextMs,
                 firstCardMs,
             });
@@ -2856,15 +3407,38 @@ export async function streamChat(
         } catch (streamErr: any) {
             lastError = streamErr;
 
+            if (postToolSynthesisTimedOut) {
+                logReq(reqId, 'LLM_STREAM', 'post-tool synthesis timed out; retaining completed tool output', {
+                    timeoutMs: POST_TOOL_TEXT_TIMEOUT_MS,
+                    toolCalls: Array.from(calledTools),
+                });
+                break;
+            }
+
             if (externalSignal?.aborted) {            // user closed the tab — stop quietly
                 clientGone = true;
                 lastError = null;
                 break;
             }
-            console.warn(`[AGENT] ⚠️ Key [${i + 1}/${keys.length}] failed (${timedOut ? 'first-token timeout' : (streamErr?.statusCode || streamErr?.message)}).`);
+            const credentialFailure = isGemini && isGeminiCredentialError(streamErr);
+            console.warn(`[AGENT] ⚠️ Key [${i + 1}/${keys.length}] failed (${timedOut ? 'first-token timeout' : (credentialFailure ? 'credential rejected' : (streamErr?.statusCode || streamErr?.message))}).`);
 
             // If tokens were already sent to the user's screen, do not restart mid-sentence.
             if (fullText.length > 0) break;
+
+            // A credential rejection is key-specific. Try every remaining key in
+            // this turn; unlike a network stall it must not consume the timeout cap.
+            if (credentialFailure) {
+                logReq(reqId, 'LLM_STREAM', 'Gemini rejected this key; trying the next configured key', {
+                    attempt: `${i + 1}/${keys.length}`,
+                    remainingKeys: Math.max(0, keys.length - i - 1),
+                });
+                if (i < keys.length - 1) {
+                    emitStatus(STATUS.RETRYING);
+                    continue;
+                }
+                break;
+            }
 
             // Timeouts can throw in some SDK/provider combinations and end the
             // iterator normally in others. Bound both behaviours the same way.
@@ -2872,12 +3446,16 @@ export async function streamChat(
                 emptyStreamAttempts += 1;
                 logReq(reqId, 'LLM_STREAM', 'attempt timed out before usable output', {
                     attempt: `${i + 1}/${keys.length}`,
-                    timeoutMs: FIRST_TOKEN_TIMEOUT_MS,
+                    timeoutMs: FIRST_USEFUL_OUTPUT_TIMEOUT_MS,
+                    firstEventThisAttemptMs: attemptFirstEventMs,
+                    firstUsefulOutputThisAttemptMs: attemptFirstUsefulOutputMs,
+                    firstUsefulKind: attemptFirstUsefulKind,
+                    observedEventTypes: Object.fromEntries(observedEventTypes),
                     emptyStreamAttempts,
                     maxEmptyStreamAttempts: MAX_EMPTY_STREAM_ATTEMPTS,
                 });
                 if (i >= keys.length - 1 || emptyStreamAttempts >= MAX_EMPTY_STREAM_ATTEMPTS) break;
-                callbacks.onStatus?.('🧠 تعذّر الحصول على رد، أعيد المحاولة...');
+                emitStatus(STATUS.RETRYING);
                 continue;
             }
 
@@ -2885,14 +3463,150 @@ export async function streamChat(
                 console.log(`[AGENT] 🔄 Switching to next API key in GEMINI_API_KEYS...`);
             }
         } finally {
-            clearFirstTokenTimer();
+            clearFirstUsefulTimer();
+            clearPostToolTextTimer();
+            clearWaitStatusTimer();
             externalSignal?.removeEventListener('abort', onExternalAbort);
         }
     }
 
-    if (lastError && !fullText) {
-        console.error('[AGENT] No usable model output after bounded attempts:', lastError.message || lastError);
-        fullText = 'تعذّر على وثيق إكمال الرد هذه المرة. حاول مجددًا بعد قليل.';
+    // Some providers execute a tool but fail to finish the assistant synthesis.
+    // Recover from request-local tool state both before and after the non-streaming
+    // fallback; otherwise a fallback that times out after a successful tool loses its card.
+    const recoverCompletedToolOutput = (): boolean => {
+        if ((fullText.trim() && !postToolSynthesisTimedOut) || clientGone) return false;
+        let recoveredTool: string | null = null;
+        if (turnState.lastRoutine) recoveredTool = 'build_routine';
+        else if (turnState.lastCabinet) recoveredTool = 'manage_cabinet';
+        else if (turnState.lastProductResults?.length) recoveredTool = 'search_products';
+        else if (turnState.lastAnalysis) recoveredTool = 'evaluate_product';
+        else if (turnState.lastProduct) recoveredTool = 'get_product';
+        else if (turnState.lastBrandEvaluation) recoveredTool = 'evaluate_brand';
+        else if (turnState.lastReviewData) recoveredTool = 'get_community_reviews';
+        if (!recoveredTool) return false;
+
+        if (firstCardMs < 0) emitCardForTool(recoveredTool, turnState, emitCard);
+        const lang = detectVoice(request.message, state.profile).tlang;
+        const isArabic = lang === 'ar' || lang === 'dz';
+        const recoveryText = recoveredTool === 'build_routine'
+            ? (isArabic ? 'حضّرت الروتين في البطاقة أدناه.' : lang === 'fr' ? 'La routine est prête dans la carte ci-dessous.' : 'The routine is ready in the card below.')
+            : recoveredTool === 'manage_cabinet'
+                ? (isArabic ? 'هذه تفاصيل خزانتك في البطاقة أدناه.' : lang === 'fr' ? 'Votre armoire est détaillée dans la carte ci-dessous.' : 'Your cabinet details are in the card below.')
+                : recoveredTool === 'search_products'
+                    ? (isArabic ? 'جهزت نتائج البحث في البطاقات أدناه.' : lang === 'fr' ? 'Les résultats sont présentés dans les cartes ci-dessous.' : 'The search results are shown in the cards below.')
+                    : (isArabic ? 'أعددت النتيجة في البطاقة أدناه.' : lang === 'fr' ? 'Le résultat est présenté dans la carte ci-dessous.' : 'The result is shown in the card below.');
+        const hadPriorText = Boolean(fullText.trim());
+        const recoveryCopy = hadPriorText ? (/[.!؟?…]\s*$/.test(fullText) ? '\n\n' : '.\n\n') : '';
+        fullText = `${fullText}${recoveryCopy}${recoveryText}`;
+        lastError = null;
+        emitStatus(STATUS.FORMULATING);
+        emitText(hadPriorText ? `${recoveryCopy}${recoveryText}` : fullText);
+        logReq(reqId, 'TOOL_RECOVERY', 'recovered completed tool output after model synthesis failure', { tool: recoveredTool });
+        return true;
+    };
+
+    recoverCompletedToolOutput();
+
+    if (lastError && !fullText.trim() && !clientGone) {
+        // Streaming can yield SDK metadata without ever yielding text or a complete
+        // tool call. If bounded stream retries fail, make one bounded non-streaming
+        // attempt before returning an error. Because the stream failed before any
+        // usable output/tool call, this fallback does not duplicate completed tools.
+        console.error('[AGENT] No usable model output after bounded stream attempts:', lastError.message || lastError);
+        emitStatus(STATUS.MODEL_FALLBACK);
+
+        const fallbackController = new AbortController();
+        const onFallbackExternalAbort = () => fallbackController.abort();
+        externalSignal?.addEventListener('abort', onFallbackExternalAbort, { once: true });
+        let fallbackTimedOut = false;
+        const fallbackStartedAt = nowMs();
+        let fallbackStatusIndex = 0;
+        const fallbackTimeout = setTimeout(() => {
+            fallbackTimedOut = true;
+            fallbackController.abort();
+        }, NON_STREAM_FALLBACK_TIMEOUT_MS);
+        const fallbackStatusTimer = setInterval(() => {
+            if (fallbackController.signal.aborted) return;
+            const waitingStatuses = [STATUS.MODEL_WAITING, STATUS.MODEL_CONTINUING];
+            emitStatus(waitingStatuses[fallbackStatusIndex % waitingStatuses.length]);
+            fallbackStatusIndex += 1;
+        }, MODEL_WAIT_STATUS_INTERVAL_MS);
+
+        try {
+            const fallbackResult = await generateText({
+                model: resolveModel(request.provider, requestGeminiKeys),
+                system: WATHIQ_SYSTEM_PROMPT,
+                messages,
+                tools,
+                stopWhen: stepCountIs(7),
+                maxOutputTokens,
+                temperature: 0.2,
+                abortSignal: fallbackController.signal,
+            });
+
+            const fallbackToolNames = Array.from(new Set(
+                (((fallbackResult as any).steps || []) as any[])
+                    .flatMap(step => (step?.toolCalls || []).map((call: any) => call?.toolName).filter(Boolean))
+            )) as string[];
+            for (const toolName of fallbackToolNames) {
+                emitCardForTool(toolName, turnState, emitCard);
+            }
+
+            if (typeof fallbackResult.text === 'string' && fallbackResult.text.trim()) {
+                fullText = fallbackResult.text;
+                lastError = null;
+                emitStatus(STATUS.FORMULATING);
+                emitText(fullText);
+                logReq(reqId, 'LLM_FALLBACK', 'non-streaming fallback succeeded', {
+                    durationMs: nowMs() - fallbackStartedAt,
+                    toolCalls: fallbackToolNames,
+                    textLength: fullText.length,
+                });
+            } else if (fallbackToolNames.length > 0 || turnState.lastProductResults?.length || turnState.lastProduct || turnState.lastAnalysis || turnState.lastRoutine) {
+                // The tool/card result is real even when the provider omits its
+                // synthesis text; provide a truthful card-linked fallback message.
+                fullText = 'أعددت النتائج في البطاقة أدناه.';
+                lastError = null;
+                emitStatus(STATUS.FORMULATING);
+                emitText(fullText);
+                logReq(reqId, 'LLM_FALLBACK', 'non-streaming fallback returned tool/card data without text', {
+                    durationMs: nowMs() - fallbackStartedAt,
+                    toolCalls: fallbackToolNames,
+                });
+            } else {
+                lastError = new Error('non-streaming fallback returned no text or tool/card data');
+                logReq(reqId, 'LLM_FALLBACK', 'non-streaming fallback returned no usable output', {
+                    durationMs: nowMs() - fallbackStartedAt,
+                    timedOut: fallbackTimedOut,
+                    toolCalls: fallbackToolNames,
+                });
+            }
+        } catch (fallbackErr: any) {
+            if (externalSignal?.aborted) {
+                clientGone = true;
+                lastError = null;
+            } else {
+                lastError = fallbackErr;
+                logReq(reqId, 'LLM_FALLBACK', 'non-streaming fallback failed', {
+                    durationMs: nowMs() - fallbackStartedAt,
+                    timedOut: fallbackTimedOut,
+                    errorName: fallbackErr?.name || 'FallbackError',
+                    message: String(fallbackErr?.message || fallbackErr).slice(0, 180),
+                });
+            }
+        } finally {
+            clearTimeout(fallbackTimeout);
+            clearInterval(fallbackStatusTimer);
+            externalSignal?.removeEventListener('abort', onFallbackExternalAbort);
+        }
+
+        // A fallback can run a tool successfully and then time out while writing
+        // its prose. Check request-local output once more before showing an error.
+        recoverCompletedToolOutput();
+        if (!fullText.trim() && !clientGone) {
+            console.error('[AGENT] Both streaming and non-streaming fallback failed:', lastError?.message || lastError);
+            fullText = 'تعذّر على وثيق إكمال الرد هذه المرة. حاول مجددًا بعد قليل.';
+        }
     } else if (!fullText.trim() && !clientGone) {
         logReq(reqId, 'LLM_STREAM', 'completed with no text', {
             finishReason: streamFinishReason,
@@ -2904,7 +3618,7 @@ export async function streamChat(
     sessionMemory.touch(sessionId);
     finalizeTurn(request, state, turnState);
     if (isDebugEnabled()) {
-        logReq(reqId, 'TIMING', `LLM PATH total=${nowMs() - t0}ms firstStreamEvent=${firstStreamEventMs}ms firstCard=${firstCardMs}ms firstText=${firstTextMs}ms${clientGone ? ' (client disconnected)' : ''}`);
+        logReq(reqId, 'TIMING', `LLM PATH total=${nowMs() - t0}ms firstStreamEvent=${firstStreamEventMs}ms firstUsefulOutput=${firstUsefulOutputMs}ms firstCard=${firstCardMs}ms firstText=${firstTextMs}ms${clientGone ? ' (client disconnected)' : ''}`);
     }
     return attachQuickReplies({ ...formatFinalResponse(request.message, fullText, turnState), sessionId, lane: 'llm' }, request, state);
 }
@@ -2915,6 +3629,8 @@ export async function streamChat(
 export async function processChat(request: ChatRequest) {
     const reqId = newReqId();
     const t0 = nowMs();
+    // One shuffled pool per user message, reused by any model path in this turn.
+    const requestGeminiKeys = getGeminiApiKeys();
     const { sessionId, state } = beginTurn(request);
     const turnState = newTurnState();
 
@@ -2923,7 +3639,7 @@ export async function processChat(request: ChatRequest) {
     if (request.images && request.images.length > 0) {
         const scan = await tryScanLane({
             message: request.message, images: request.images, state, turnState, tools,
-            parser: parseContributionImages as any,
+            parser: (payload: any) => parseContributionImages(payload, requestGeminiKeys) as any,
         });
         if (scan) {
             sessionMemory.touch(sessionId);
@@ -2934,9 +3650,14 @@ export async function processChat(request: ChatRequest) {
     }
 
     // Fast lane works for the JSON endpoint too (no callbacks needed).
-    if (FAST_LANE_ENABLED && state.longtermForgotTurn !== state.turnCount && !(await hasSafetyTrigger(request.message))) {
+    const processIntent = classifyIntent(request.message, state);
+    const directEvaluationIntent = processIntent.confidence === 'high'
+        && processIntent.likelyTools[0] === 'evaluate_product'
+        && !looksLikeReaction(request.message);
+    const safetyMatched = directEvaluationIntent ? false : await hasSafetyTrigger(request.message);
+    if (FAST_LANE_ENABLED && state.longtermForgotTurn !== state.turnCount && (!safetyMatched || directEvaluationIntent)) {
         try {
-            const intent = classifyIntent(request.message, state);
+            const intent = processIntent;
             const fast = await tryFastLane({ message: request.message, state, turnState, tools, intent: intent as any });
             if (fast) {
                 sessionMemory.touch(sessionId);
@@ -2956,7 +3677,7 @@ export async function processChat(request: ChatRequest) {
     let text = '';
     try {
         const result = await generateText({
-            model: resolveModel(request.provider),
+            model: resolveModel(request.provider, requestGeminiKeys),
             system: WATHIQ_SYSTEM_PROMPT,
             messages,
             tools,

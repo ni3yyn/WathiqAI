@@ -65,3 +65,8 @@ components/
 ## Premium visual layer
 
 `assets/css/premium-redesign.css` is loaded last by both entry points. It keeps the original sage/forest palette, improves the responsive chat layout and card surfaces, restores intentional borders and keyboard focus states, and owns the complete user-message bubble styling. User-message structure lives in `components/chat-messages/chat-messages.js`; its visual design stays in CSS.
+
+
+## Product lookup UI and error-handling upgrade
+
+The latest UI also includes larger responsive product selection cards, explicit selection/evaluation actions, support for candidate products without INCI data (via photo upload), and visible retry handling for failed or incomplete requests. See `UI_UPGRADE_NOTES.md` for the behavior contract and validation details.

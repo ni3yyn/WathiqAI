@@ -357,8 +357,8 @@
                     _renderedCards.add(dKey);
                 }
                 // ── existing card types (preserved exactly) ────────────────
-                if (s.type === 'product_results' && s.products?.length > 0) return renderProductsGrid(s.products);
-                if (s.type === 'product' && s.product) return renderProductsGrid([s.product]);
+                if (s.type === 'product_results' && s.products?.length > 0) return renderProductsGrid(s.products, 'results');
+                if (s.type === 'product' && s.product) return renderProductsGrid([s.product], 'single');
                 if (s.type === 'product_analysis' && s.analysis) return renderAnalysisCard(s.analysis, s.productName, s.brand, s.image);
                 if (s.type === 'routine' && s.routine) return renderRoutineCard(s.routine);
                 if (s.type === 'brand_evaluation' && s.brandEvaluation) return renderBrandReviewCard(s.brandEvaluation);

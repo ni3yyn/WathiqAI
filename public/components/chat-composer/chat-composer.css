@@ -91,3 +91,122 @@
             transform: scale(1.06);
         }
         .send-pill-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+
+/* v6.3.1 — make image selection discoverable and previews unmistakable */
+.photo-file-input {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+.photo-attach-btn {
+    width: auto !important;
+    min-width: 43px;
+    padding: 0 11px !important;
+    gap: 7px;
+    border: 1px solid rgba(85,143,98,.2) !important;
+    border-radius: 14px !important;
+    color: #3f7249 !important;
+    background: #edf5ee !important;
+    font-size: .78rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.photo-attach-btn svg { flex: 0 0 auto; }
+.photo-attach-btn:hover { background: #e1efe3 !important; }
+.photo-attach-btn:focus-visible,
+.photo-preview-bar button:focus-visible,
+.photo-preview-bar select:focus-visible {
+    outline: 3px solid rgba(85,143,98,.4);
+    outline-offset: 2px;
+}
+.photo-preview-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    margin-bottom: 7px;
+    border: 1px solid #cfe2d2;
+    border-radius: 15px;
+    background: #f4faf5;
+    color: #345b3c;
+}
+.photo-preview-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 5px 7px;
+    border: 1px solid #dbe9dd;
+    border-radius: 12px;
+    background: #fff;
+}
+.photo-preview-item img {
+    width: 48px;
+    height: 48px;
+    flex: 0 0 auto;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid #d0e0d2;
+}
+.photo-preview-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.photo-preview-name {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #263d2d;
+    font-size: .75rem;
+    font-weight: 650;
+}
+.photo-preview-role { max-width: 180px; font-size: .73rem; }
+.photo-preview-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    color: #7f514d;
+    background: #fff3f1;
+    font-size: 1.1rem;
+    cursor: pointer;
+}
+.photo-attach-hint { color: #6a7e6d; font-size: .75rem; }
+@media (max-width: 520px) {
+    .photo-attach-btn { min-width: 39px; padding: 0 9px !important; gap: 5px; font-size: .73rem; }
+    .photo-preview-item { flex: 1 1 100%; }
+    .photo-preview-name { max-width: min(42vw, 220px); }
+    .photo-preview-role { max-width: 42vw; }
+}
+
+/* Higher-specificity overrides because the premium redesign stylesheet also styles pill buttons. */
+#photoBtn.photo-attach-btn {
+    width: auto !important;
+    min-width: 96px !important;
+    height: 39px !important;
+    padding: 0 11px !important;
+    border-radius: 13px !important;
+    color: #3f7249 !important;
+    background: #edf5ee !important;
+    border-color: rgba(85,143,98,.2) !important;
+}
+#photoBtn.photo-attach-btn.has-photos {
+    color: #2f6640 !important;
+    background: #dcefe0 !important;
+    border-color: #abd1b3 !important;
+}
+@media (max-width: 520px) {
+    #photoBtn.photo-attach-btn { min-width: 82px !important; padding: 0 8px !important; }
+    #photoBtn .photo-attach-label { font-size: .7rem; }
+}
